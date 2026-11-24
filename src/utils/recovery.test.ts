@@ -21,9 +21,6 @@ import {
   validateLoginInput,
   validatePasswordResetInput,
   validateVerificationCode,
-  recoveryFormSchema,
-  evaluatePasswordStrength,
-  getPasswordMatchStatus,
 } from './recovery';
 
 test('validateAccountInput rejects empty and whitespace-only values', () => {
@@ -140,90 +137,4 @@ test('validatePasswordResetInput validates new and confirm passwords', () => {
   assert.equal(validResult.isValid, true);
   assert.equal(validResult.newPasswordError, '');
   assert.equal(validResult.confirmPasswordError, '');
-});
-
-test('recoveryFormSchema parses, trims, and rejects invalid payloads', () => {
-  const validTrimmed = recoveryFormSchema.safeParse({
-    account: '  alex@example.com  ',
-  });
-  assert.equal(validTrimmed.success, true);
-  if (validTrimmed.success) {
-    assert.equal(validTrimmed.data.account, 'alex@example.com');
-  }
-
-  const badEmail = recoveryFormSchema.safeParse({account: 'not-an-email@'});
-  assert.equal(badEmail.success, false);
-  if (!badEmail.success) {
-    assert.equal(badEmail.error.issues[0]?.message, INVALID_EMAIL_ERROR);
-  }
-
-  const badUsername = recoveryFormSchema.safeParse({account: 'a!'});
-  assert.equal(badUsername.success, false);
-  if (!badUsername.success) {
-    assert.equal(badUsername.error.issues[0]?.message, INVALID_USERNAME_ERROR);
-  }
-
-  const tooLong = recoveryFormSchema.safeParse({
-    account: 'x'.repeat(MAX_ACCOUNT_LENGTH + 1),
-  });
-  assert.equal(tooLong.success, false);
-  if (!tooLong.success) {
-    assert.equal(tooLong.error.issues[0]?.message, ACCOUNT_TOO_LONG_ERROR);
-  }
-
-  const nonString = recoveryFormSchema.safeParse({account: 123});
-  assert.equal(nonString.success, false);
-  if (!nonString.success) {
-    assert.equal(nonString.error.issues[0]?.message, EMPTY_ACCOUNT_ERROR);
-  }
-});
-
-test('evaluatePasswordStrength scores length, uppercase, lowercase, and numbers', () => {
-  const empty = evaluatePasswordStrength('');
-  assert.equal(empty.score, 0);
-  assert.equal(empty.label, '');
-  assert.equal(empty.checks.minLength, false);
-
-  const tooShort = evaluatePasswordStrength('Ab1');
-  assert.equal(tooShort.score, 1);
-  assert.equal(tooShort.label, 'Weak');
-  assert.equal(tooShort.checks.hasUppercase, true);
-  assert.equal(tooShort.checks.hasLowercase, true);
-  assert.equal(tooShort.checks.hasNumber, true);
-  assert.equal(tooShort.checks.minLength, false);
-
-  const fair = evaluatePasswordStrength('Abcdef');
-  assert.equal(fair.score, 2);
-  assert.equal(fair.label, 'Fair');
-
-  const good = evaluatePasswordStrength('secret123');
-  assert.equal(good.score, 3);
-  assert.equal(good.label, 'Good');
-  assert.equal(good.checks.minLength, true);
-  assert.equal(good.checks.hasUppercase, false);
-
-  const strong = evaluatePasswordStrength('Secret123');
-  assert.equal(strong.score, 4);
-  assert.equal(strong.label, 'Strong');
-  assert.deepEqual(strong.checks, {
-    minLength: true,
-    hasUppercase: true,
-    hasLowercase: true,
-    hasNumber: true,
-  });
-});
-
-test('getPasswordMatchStatus reports idle, mismatch, and match in real time', () => {
-  assert.deepEqual(getPasswordMatchStatus('Secret123', ''), {
-    status: 'idle',
-    message: '',
-  });
-  assert.deepEqual(getPasswordMatchStatus('Secret123', 'Secret12'), {
-    status: 'mismatch',
-    message: 'Passwords do not match',
-  });
-  assert.deepEqual(getPasswordMatchStatus('Secret123', 'Secret123'), {
-    status: 'match',
-    message: 'Passwords match',
-  });
 });

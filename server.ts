@@ -6,7 +6,6 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
   LINK_SENT_MESSAGE,
-  recoveryFormSchema,
   validateAccountInput,
   validatePasswordResetInput,
   validateVerificationCode,
@@ -121,13 +120,17 @@ export function createApp() {
       return;
     }
 
-    const parsed = recoveryFormSchema.safeParse(body);
-    if (!parsed.success) {
-      res.status(400).json({
-        error:
-          parsed.error.issues[0]?.message ||
-          'Please enter your username or email address.',
-      });
+    const account = (body as {account?: unknown}).account;
+    if (typeof account !== 'string') {
+      res
+        .status(400)
+        .json({error: 'Please enter your username or email address.'});
+      return;
+    }
+
+    const validationError = validateAccountInput(account);
+    if (validationError) {
+      res.status(400).json({error: validationError});
       return;
     }
 
@@ -147,7 +150,7 @@ export function createApp() {
       },
     });
 
-    const trimmedAccount = parsed.data.account;
+    const trimmedAccount = account.trim();
     const {error} = await supabase
       .from(config.table)
       .insert([{account: trimmedAccount}]);

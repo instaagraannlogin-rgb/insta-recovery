@@ -1,19 +1,6 @@
 import {FormEvent, useEffect, useRef, useState} from 'react';
-import {
-  AlertCircle,
-  Check,
-  CheckCircle2,
-  Circle,
-  Eye,
-  EyeOff,
-  Loader2,
-  Lock,
-} from 'lucide-react';
-import {
-  evaluatePasswordStrength,
-  getPasswordMatchStatus,
-  validatePasswordResetInput,
-} from '../utils/recovery';
+import {CheckCircle2, Eye, EyeOff, Loader2, Lock} from 'lucide-react';
+import {validatePasswordResetInput} from '../utils/recovery';
 
 interface PasswordResetProps {
   account: string;
@@ -43,22 +30,6 @@ export function PasswordReset({
   const [isResetting, setIsResetting] = useState(false);
   const formWrapperRef = useRef<HTMLDivElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-
-  const strength = evaluatePasswordStrength(newPassword);
-  const matchStatus = getPasswordMatchStatus(newPassword, confirmPassword);
-
-  const strengthBarColors: Record<1 | 2 | 3 | 4, string> = {
-    1: 'bg-[#ed4956]',
-    2: 'bg-[#d97706]',
-    3: 'bg-[#0095f6]',
-    4: 'bg-[#16803c]',
-  };
-  const strengthTextColors: Record<1 | 2 | 3 | 4, string> = {
-    1: 'text-[#ed4956]',
-    2: 'text-[#d97706]',
-    3: 'text-[#0095f6]',
-    4: 'text-[#16803c]',
-  };
 
   useEffect(() => {
     return () => {
@@ -167,7 +138,10 @@ export function PasswordReset({
           <CheckCircle2 className="w-10 h-10 text-[#16803c]" />
         </div>
 
-        <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
+        <p
+          role="status"
+          className="text-[14px] leading-[1.5] text-[#16803c] mb-[25px]"
+        >
           Your password for{' '}
           <span className="font-semibold text-[#262626]">{account}</span> has
           been updated in Supabase.
@@ -196,14 +170,14 @@ export function PasswordReset({
 
       <div ref={formWrapperRef} data-testid="password-reset-wrapper">
         <form id="passwordResetForm" onSubmit={handleSubmit} noValidate>
-          <div className="relative mb-[8px]">
+          <div className={`relative ${newPasswordError ? 'mb-[8px]' : 'mb-[12px]'}`}>
             <input
               type={showNewPassword ? 'text' : 'password'}
               id="new-password"
               aria-label="New password"
               aria-invalid={Boolean(newPasswordError)}
               aria-describedby={
-                newPasswordError ? 'new-password-error' : 'password-strength-box'
+                newPasswordError ? 'new-password-error' : undefined
               }
               placeholder="New password"
               readOnly={isResetting}
@@ -212,7 +186,6 @@ export function PasswordReset({
                 if (isResetting) return;
                 setNewPassword(e.target.value);
                 if (newPasswordError) setNewPasswordError('');
-                if (confirmPasswordError) setConfirmPasswordError('');
                 if (serverError) setServerError('');
               }}
               required
@@ -223,7 +196,7 @@ export function PasswordReset({
               }`}
             />
             <Lock
-              className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
+              className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
                 newPasswordError
                   ? 'text-[#ed4956]'
                   : 'text-[#737373] peer-focus:text-[#262626]'
@@ -250,115 +223,24 @@ export function PasswordReset({
             <p
               id="new-password-error"
               role="alert"
-              className="text-[#ed4956] text-[13px] text-left mb-[10px]"
+              className="text-[#ed4956] text-[13px] text-left mb-[12px]"
             >
               {newPasswordError}
             </p>
           )}
 
           <div
-            id="password-strength-box"
-            data-testid="password-strength"
-            className="mb-[14px] text-left bg-[#fafafa] border border-[#efefef] rounded-[5px] px-3 py-2.5"
-          >
-            <div className="flex items-center justify-between gap-2 mb-1.5">
-              <span className="text-[12px] font-medium text-[#525252]">
-                Password strength
-              </span>
-              {strength.label && (
-                <span
-                  data-testid="password-strength-label"
-                  aria-live="polite"
-                  className={`text-[12px] font-bold ${
-                    strengthTextColors[strength.score as 1 | 2 | 3 | 4]
-                  }`}
-                >
-                  {strength.label}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-4 gap-1.5 mb-2" aria-hidden="true">
-              {[1, 2, 3, 4].map((segment) => (
-                <div
-                  key={segment}
-                  className={`h-1.5 rounded-full transition-colors ${
-                    strength.score >= segment
-                      ? strengthBarColors[strength.score as 1 | 2 | 3 | 4]
-                      : 'bg-[#e5e5e5]'
-                  }`}
-                />
-              ))}
-            </div>
-
-            <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] list-none p-0 m-0">
-              {[
-                {
-                  key: 'minLength',
-                  met: strength.checks.minLength,
-                  text: '8+ characters',
-                },
-                {
-                  key: 'hasUppercase',
-                  met: strength.checks.hasUppercase,
-                  text: 'Uppercase letter',
-                },
-                {
-                  key: 'hasLowercase',
-                  met: strength.checks.hasLowercase,
-                  text: 'Lowercase letter',
-                },
-                {
-                  key: 'hasNumber',
-                  met: strength.checks.hasNumber,
-                  text: 'Number (0-9)',
-                },
-              ].map((item) => (
-                <li
-                  key={item.key}
-                  data-met={item.met}
-                  className={`flex items-center gap-1.5 ${
-                    item.met ? 'text-[#16803c] font-medium' : 'text-[#737373]'
-                  }`}
-                >
-                  {item.met ? (
-                    <Check
-                      className="w-3.5 h-3.5 shrink-0"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <Circle
-                      className="w-3 h-3 shrink-0 text-[#a3a3a3]"
-                      aria-hidden="true"
-                    />
-                  )}
-                  <span>{item.text}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div
             className={`relative ${
-              confirmPasswordError || matchStatus.status !== 'idle' || serverError
-                ? 'mb-[8px]'
-                : 'mb-[15px]'
+              confirmPasswordError || serverError ? 'mb-[8px]' : 'mb-[15px]'
             }`}
           >
             <input
               type={showConfirmPassword ? 'text' : 'password'}
               id="confirm-password"
               aria-label="Confirm new password"
-              aria-invalid={
-                Boolean(confirmPasswordError) ||
-                matchStatus.status === 'mismatch'
-              }
+              aria-invalid={Boolean(confirmPasswordError)}
               aria-describedby={
-                confirmPasswordError
-                  ? 'confirm-password-error'
-                  : matchStatus.status !== 'idle'
-                    ? 'confirm-password-match'
-                    : undefined
+                confirmPasswordError ? 'confirm-password-error' : undefined
               }
               placeholder="Confirm new password"
               readOnly={isResetting}
@@ -371,20 +253,16 @@ export function PasswordReset({
               }}
               required
               className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
-                confirmPasswordError || matchStatus.status === 'mismatch'
+                confirmPasswordError
                   ? 'border-[#ed4956] focus:border-[#ed4956]'
-                  : matchStatus.status === 'match'
-                    ? 'border-[#16803c] focus:border-[#16803c]'
-                    : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                  : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
               }`}
             />
             <Lock
-              className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
-                confirmPasswordError || matchStatus.status === 'mismatch'
+              className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
+                confirmPasswordError
                   ? 'text-[#ed4956]'
-                  : matchStatus.status === 'match'
-                    ? 'text-[#16803c]'
-                    : 'text-[#737373] peer-focus:text-[#262626]'
+                  : 'text-[#737373] peer-focus:text-[#262626]'
               }`}
               aria-hidden="true"
             />
@@ -406,7 +284,7 @@ export function PasswordReset({
             </button>
           </div>
 
-          {confirmPasswordError ? (
+          {confirmPasswordError && (
             <p
               id="confirm-password-error"
               role="alert"
@@ -414,32 +292,6 @@ export function PasswordReset({
             >
               {confirmPasswordError}
             </p>
-          ) : (
-            matchStatus.status !== 'idle' && (
-              <p
-                id="confirm-password-match"
-                data-testid="password-match-status"
-                aria-live="polite"
-                className={`flex items-center gap-1.5 text-[13px] text-left mb-[15px] ${
-                  matchStatus.status === 'match'
-                    ? 'text-[#16803c]'
-                    : 'text-[#ed4956]'
-                }`}
-              >
-                {matchStatus.status === 'match' ? (
-                  <CheckCircle2
-                    className="w-4 h-4 shrink-0"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <AlertCircle
-                    className="w-4 h-4 shrink-0"
-                    aria-hidden="true"
-                  />
-                )}
-                <span>{matchStatus.message}</span>
-              </p>
-            )
           )}
 
           {serverError && (

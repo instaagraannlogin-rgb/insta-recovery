@@ -1,7 +1,6 @@
 import {FormEvent, useEffect, useRef, useState} from 'react';
 import {KeyRound, Loader2, User} from 'lucide-react';
 import {
-  CODE_VERIFIED_MESSAGE,
   MAX_ACCOUNT_LENGTH,
   VERIFICATION_CODE_LENGTH,
   getAccountCharacterStatus,
@@ -12,16 +11,16 @@ import {PasswordReset} from './PasswordReset';
 
 interface RecoveryCardProps {
   onBackToLogin?: () => void;
-  onNotify?: (message: string, title?: string) => void;
 }
 
-export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
+export function RecoveryCard({onBackToLogin}: RecoveryCardProps) {
   const [step, setStep] = useState<'request' | 'verify' | 'reset'>('request');
   const [account, setAccount] = useState('');
   const [submittedAccount, setSubmittedAccount] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [submittedMessage, setSubmittedMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resetCompleted, setResetCompleted] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -74,12 +73,14 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
 
     const result = processRecoverySubmission(account);
     if (!result.submitted) {
+      setSubmittedMessage('');
       setErrorMessage(result.error);
       triggerShake();
       return;
     }
 
     setErrorMessage('');
+    setSubmittedMessage('');
     setIsSubmitting(true);
 
     abortControllerRef.current?.abort();
@@ -114,10 +115,10 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
       }
 
       setSubmittedAccount(trimmedAccount);
+      setSubmittedMessage(data?.message || result.message);
       setResetToken(data?.resetToken || '');
       setVerificationCode('');
       setStep('verify');
-      onNotify?.(data?.message || result.message, 'Recovery link sent');
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         return;
@@ -142,7 +143,6 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
 
     setErrorMessage('');
     setStep('reset');
-    onNotify?.(CODE_VERIFIED_MESSAGE, 'Code verified');
   };
 
   const handleResetToRequest = () => {
@@ -150,6 +150,7 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
     setVerificationCode('');
     setResetToken('');
     setErrorMessage('');
+    setSubmittedMessage('');
     setResetCompleted(false);
   };
 
@@ -201,6 +202,9 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
                     setAccount(e.target.value.slice(0, MAX_ACCOUNT_LENGTH));
                     if (errorMessage) {
                       setErrorMessage('');
+                    }
+                    if (submittedMessage) {
+                      setSubmittedMessage('');
                     }
                   }}
                   required
@@ -275,6 +279,16 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
             <h2 className="text-[22px] font-bold mb-[15px]">
               Enter verification code
             </h2>
+
+            {submittedMessage && (
+              <div
+                id="message"
+                role="status"
+                className="text-[#16803c] text-[13px] mb-[12px]"
+              >
+                {submittedMessage}
+              </div>
+            )}
 
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
               Enter the 6-digit verification code sent to{' '}
@@ -359,10 +373,7 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
             resetToken={resetToken}
             onBackToLogin={onBackToLogin}
             onUseDifferentAccount={handleResetToRequest}
-            onResetSuccess={() => {
-              setResetCompleted(true);
-              onNotify?.('Your password has been updated.', 'Password updated');
-            }}
+            onResetSuccess={() => setResetCompleted(true)}
           />
         )}
 
