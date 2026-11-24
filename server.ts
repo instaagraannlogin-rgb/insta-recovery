@@ -85,7 +85,10 @@ function resolveSupabaseConfig(): {
   key: string;
   table: string;
 } | null {
-  const rawUrl = process.env.SUPABASE_URL?.trim() || '';
+  const rawUrl =
+    process.env.SUPABASE_URL?.trim() ||
+    process.env.VITE_SUPABASE_URL?.trim() ||
+    '';
   const projectId = process.env.SUPABASE_PROJECT_ID?.trim() || '';
   const url =
     rawUrl ||
@@ -95,6 +98,8 @@ function resolveSupabaseConfig(): {
   const key =
     process.env.SUPABASE_PUBLISHABLE_KEY?.trim() ||
     process.env.SUPABASE_ANON_KEY?.trim() ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ||
+    process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
     '';
   const rawTable =
     process.env.SUPABASE_RECOVERY_TABLE?.trim() || 'recovery_requests';
@@ -157,10 +162,11 @@ export function createApp() {
 
     if (error) {
       console.error('Supabase recovery insert failed:', error.code || error.message);
-      res.status(502).json({
-        error:
-          'Unable to save recovery request to Supabase. Ensure the recovery_requests table and insert policy exist.',
-      });
+      const hint =
+        error.code === '42501'
+          ? 'Supabase permission denied for recovery_requests. Grant INSERT/SELECT/UPDATE privileges and RLS policies to the anon role.'
+          : 'Unable to save recovery request to Supabase. Ensure the recovery_requests table and insert policy exist.';
+      res.status(502).json({error: hint});
       return;
     }
 

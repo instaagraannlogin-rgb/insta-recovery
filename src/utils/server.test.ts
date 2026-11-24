@@ -5,6 +5,7 @@ import {
   createApp,
   createResetToken,
   hashPasswordScrypt,
+  resolveSupabaseConfig,
   verifyResetToken,
 } from '../../server.ts';
 
@@ -112,4 +113,45 @@ test('POST /api/password-reset rejects mismatched passwords and invalid tokens',
     });
     assert.equal(invalidTokenRes.status, 403);
   });
+});
+
+test('resolveSupabaseConfig normalizes URLs, falls back to project ID, and sanitizes table name', () => {
+  const keys = [
+    'SUPABASE_URL',
+    'SUPABASE_PROJECT_ID',
+    'SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_ANON_KEY',
+    'SUPABASE_RECOVERY_TABLE',
+  ] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+
+  try {
+    for (const k of keys) delete process.env[k];
+    assert.equal(resolveSupabaseConfig(), null);
+
+    process.env.SUPABASE_URL = 'https://example-proj.supabase.co/';
+    process.env.SUPABASE_PUBLISHABLE_KEY = 'pk_test_placeholder';
+    assert.deepEqual(resolveSupabaseConfig(), {
+      url: 'https://example-proj.supabase.co',
+      key: 'pk_test_placeholder',
+      table: 'recovery_requests',
+    });
+
+    delete process.env.SUPABASE_URL;
+    process.env.SUPABASE_PROJECT_ID = 'example-proj';
+    process.env.SUPABASE_RECOVERY_TABLE = 'invalid-table-name;drop';
+    assert.deepEqual(resolveSupabaseConfig(), {
+      url: 'https://example-proj.supabase.co',
+      key: 'pk_test_placeholder',
+      table: 'recovery_requests',
+    });
+
+    process.env.SUPABASE_URL = 'http://insecure.example.com';
+    assert.equal(resolveSupabaseConfig(), null);
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 });

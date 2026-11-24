@@ -1,3 +1,5 @@
+import {z} from 'zod';
+
 export interface RecoverySubmissionResult {
   submitted: boolean;
   message: string;
@@ -29,8 +31,51 @@ export const INVALID_EMAIL_ERROR = 'Please enter a valid email address.';
 export const INVALID_USERNAME_ERROR =
   'Username must be at least 3 characters and use only letters, numbers, dots, underscores, or hyphens.';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,}$/;
+const emailValidator = z.email({error: INVALID_EMAIL_ERROR});
+
+export const accountSchema = z
+  .string({error: EMPTY_ACCOUNT_ERROR})
+  .trim()
+  .superRefine((trimmed, ctx) => {
+    if (trimmed.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: EMPTY_ACCOUNT_ERROR,
+      });
+      return;
+    }
+
+    if (trimmed.length > MAX_ACCOUNT_LENGTH) {
+      ctx.addIssue({
+        code: 'custom',
+        message: ACCOUNT_TOO_LONG_ERROR,
+      });
+      return;
+    }
+
+    if (trimmed.includes('@')) {
+      const emailCheck = emailValidator.safeParse(trimmed);
+      if (!emailCheck.success) {
+        ctx.addIssue({
+          code: 'custom',
+          message: INVALID_EMAIL_ERROR,
+        });
+      }
+      return;
+    }
+
+    if (!USERNAME_PATTERN.test(trimmed)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: INVALID_USERNAME_ERROR,
+      });
+    }
+  });
+
+export const recoveryFormSchema = z.object({
+  account: accountSchema,
+});
 
 export function getAccountCharacterStatus(
   value: string,
@@ -52,36 +97,26 @@ export function getAccountCharacterStatus(
 }
 
 export function validateAccountInput(value: string): string {
-  const trimmed = value.trim();
-
-  if (trimmed.length === 0) {
-    return EMPTY_ACCOUNT_ERROR;
+  const parsed = recoveryFormSchema.safeParse({account: value});
+  if (parsed.success) {
+    return '';
   }
-
-  if (trimmed.length > MAX_ACCOUNT_LENGTH) {
-    return ACCOUNT_TOO_LONG_ERROR;
-  }
-
-  if (trimmed.includes('@')) {
-    return EMAIL_PATTERN.test(trimmed) ? '' : INVALID_EMAIL_ERROR;
-  }
-
-  return USERNAME_PATTERN.test(trimmed) ? '' : INVALID_USERNAME_ERROR;
+  return parsed.error.issues[0]?.message || INVALID_USERNAME_ERROR;
 }
 
 export function isValidAccountInput(value: string): boolean {
-  return validateAccountInput(value) === '';
+  return recoveryFormSchema.safeParse({account: value}).success;
 }
 
 export function processRecoverySubmission(
   account: string,
 ): RecoverySubmissionResult {
-  const error = validateAccountInput(account);
-  if (error) {
+  const parsed = recoveryFormSchema.safeParse({account});
+  if (!parsed.success) {
     return {
       submitted: false,
       message: '',
-      error,
+      error: parsed.error.issues[0]?.message || INVALID_USERNAME_ERROR,
     };
   }
 
@@ -96,22 +131,51 @@ export const VERIFICATION_CODE_LENGTH = 6;
 export const EMPTY_CODE_ERROR = 'Please enter the 6-digit verification code.';
 export const INVALID_CODE_ERROR = 'Verification code must be 6 digits.';
 export const CODE_VERIFIED_MESSAGE =
-  'Verification code accepted. You can now sign in to your account.';
+  'Verification code confirmed. You can now set a new password.';
 
 const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
 
+export const verificationCodeSchema = z
+  .string({error: EMPTY_CODE_ERROR})
+  .trim()
+  .superRefine((trimmed, ctx) => {
+    if (trimmed.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: EMPTY_CODE_ERROR,
+      });
+      return;
+    }
+    if (!VERIFICATION_CODE_PATTERN.test(trimmed)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: INVALID_CODE_ERROR,
+      });
+    }
+  });
+
 export function validateVerificationCode(code: string): string {
-  const trimmed = code.trim();
-  if (trimmed.length === 0) {
-    return EMPTY_CODE_ERROR;
+  const parsed = verificationCodeSchema.safeParse(code);
+  if (parsed.success) {
+    return '';
   }
-  return VERIFICATION_CODE_PATTERN.test(trimmed) ? '' : INVALID_CODE_ERROR;
+  return parsed.error.issues[0]?.message || INVALID_CODE_ERROR;
 }
 
 export const MIN_PASSWORD_LENGTH = 6;
 export const EMPTY_PASSWORD_ERROR = 'Please enter your password.';
 export const SHORT_PASSWORD_ERROR =
   'Password must be at least 6 characters long.';
+
+export const passwordSchema = z
+  .string({error: EMPTY_PASSWORD_ERROR})
+  .min(1, {error: EMPTY_PASSWORD_ERROR})
+  .min(MIN_PASSWORD_LENGTH, {error: SHORT_PASSWORD_ERROR});
+
+export const loginFormSchema = z.object({
+  account: accountSchema,
+  password: passwordSchema,
+});
 
 export interface LoginValidationResult {
   accountError: string;
@@ -123,24 +187,47 @@ export function validateLoginInput(
   account: string,
   password: string,
 ): LoginValidationResult {
-  const accountError = validateAccountInput(account);
-  let passwordError = '';
+  const parsed = loginFormSchema.safeParse({account, password});
+  if (parsed.success) {
+    return {accountError: '', passwordError: '', isValid: true};
+  }
 
-  if (password.length === 0) {
-    passwordError = EMPTY_PASSWORD_ERROR;
-  } else if (password.length < MIN_PASSWORD_LENGTH) {
-    passwordError = SHORT_PASSWORD_ERROR;
+  let accountError = '';
+  let passwordError = '';
+  for (const issue of parsed.error.issues) {
+    if (issue.path[0] === 'account' && !accountError) {
+      accountError = issue.message;
+    } else if (issue.path[0] === 'password' && !passwordError) {
+      passwordError = issue.message;
+    }
   }
 
   return {
     accountError,
     passwordError,
-    isValid: accountError === '' && passwordError === '',
+    isValid: false,
   };
 }
 
 export const CONFIRM_PASSWORD_EMPTY_ERROR = 'Please confirm your new password.';
 export const PASSWORD_MISMATCH_ERROR = 'Passwords do not match.';
+
+export const passwordResetSchema = z
+  .object({
+    newPassword: passwordSchema,
+    confirmPassword: z
+      .string({error: CONFIRM_PASSWORD_EMPTY_ERROR})
+      .min(1, {error: CONFIRM_PASSWORD_EMPTY_ERROR}),
+  })
+  .superRefine((data, ctx) => {
+    if (data.confirmPassword.length > 0 && data.newPassword !== data.confirmPassword) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['confirmPassword'],
+        message: PASSWORD_MISMATCH_ERROR,
+      });
+    }
+  });
 
 export interface PasswordResetValidationResult {
   newPasswordError: string;
@@ -152,24 +239,107 @@ export function validatePasswordResetInput(
   newPassword: string,
   confirmPassword: string,
 ): PasswordResetValidationResult {
-  let newPasswordError = '';
-  let confirmPasswordError = '';
-
-  if (newPassword.length === 0) {
-    newPasswordError = EMPTY_PASSWORD_ERROR;
-  } else if (newPassword.length < MIN_PASSWORD_LENGTH) {
-    newPasswordError = SHORT_PASSWORD_ERROR;
+  const parsed = passwordResetSchema.safeParse({newPassword, confirmPassword});
+  if (parsed.success) {
+    return {newPasswordError: '', confirmPasswordError: '', isValid: true};
   }
 
-  if (confirmPassword.length === 0) {
-    confirmPasswordError = CONFIRM_PASSWORD_EMPTY_ERROR;
-  } else if (newPassword !== confirmPassword) {
-    confirmPasswordError = PASSWORD_MISMATCH_ERROR;
+  let newPasswordError = '';
+  let confirmPasswordError = '';
+  for (const issue of parsed.error.issues) {
+    if (issue.path[0] === 'newPassword' && !newPasswordError) {
+      newPasswordError = issue.message;
+    } else if (issue.path[0] === 'confirmPassword' && !confirmPasswordError) {
+      confirmPasswordError = issue.message;
+    }
   }
 
   return {
     newPasswordError,
     confirmPasswordError,
-    isValid: newPasswordError === '' && confirmPasswordError === '',
+    isValid: false,
   };
+}
+
+export type PasswordStrengthLabel = '' | 'Weak' | 'Fair' | 'Good' | 'Strong';
+
+export interface PasswordStrengthResult {
+  score: 0 | 1 | 2 | 3 | 4;
+  label: PasswordStrengthLabel;
+  checks: {
+    minLength: boolean;
+    hasUppercase: boolean;
+    hasLowercase: boolean;
+    hasNumber: boolean;
+  };
+}
+
+export const STRENGTH_MIN_LENGTH = 8;
+
+export function evaluatePasswordStrength(
+  password: string,
+): PasswordStrengthResult {
+  const checks = {
+    minLength: password.length >= STRENGTH_MIN_LENGTH,
+    hasUppercase: /[A-Z]/.test(password),
+    hasLowercase: /[a-z]/.test(password),
+    hasNumber: /\d/.test(password),
+  };
+
+  if (password.length === 0) {
+    return {
+      score: 0,
+      label: '',
+      checks,
+    };
+  }
+
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return {
+      score: 1,
+      label: 'Weak',
+      checks,
+    };
+  }
+
+  const metCount = [
+    checks.minLength,
+    checks.hasUppercase,
+    checks.hasLowercase,
+    checks.hasNumber,
+  ].filter(Boolean).length;
+
+  const score = Math.max(1, metCount) as 1 | 2 | 3 | 4;
+  const labels: Record<1 | 2 | 3 | 4, Exclude<PasswordStrengthLabel, ''>> = {
+    1: 'Weak',
+    2: 'Fair',
+    3: 'Good',
+    4: 'Strong',
+  };
+
+  return {
+    score,
+    label: labels[score],
+    checks,
+  };
+}
+
+export interface PasswordMatchStatus {
+  status: 'idle' | 'match' | 'mismatch';
+  message: string;
+}
+
+export function getPasswordMatchStatus(
+  newPassword: string,
+  confirmPassword: string,
+): PasswordMatchStatus {
+  if (confirmPassword.length === 0) {
+    return {status: 'idle', message: ''};
+  }
+
+  if (newPassword === confirmPassword) {
+    return {status: 'match', message: 'Passwords match'};
+  }
+
+  return {status: 'mismatch', message: 'Passwords do not match'};
 }
