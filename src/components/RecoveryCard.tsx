@@ -1,14 +1,13 @@
-import {FormEvent, useEffect, useRef, useState} from 'react';
-import {KeyRound, Loader2, User} from 'lucide-react';
+import {FormEvent, useRef, useState} from 'react';
+import {sendPasswordResetEmail} from 'firebase/auth';
+import {CheckCircle2, Loader2, User} from 'lucide-react';
+import {auth} from '../firebase';
+import {mapFirebaseAuthError, requireEmailForFirebaseAuth} from '../utils/firebaseAuth';
 import {
-  CODE_VERIFIED_MESSAGE,
+  LINK_SENT_MESSAGE,
   MAX_ACCOUNT_LENGTH,
-  VERIFICATION_CODE_LENGTH,
   getAccountCharacterStatus,
-  processRecoverySubmission,
-  validateVerificationCode,
 } from '../utils/recovery';
-import {PasswordReset} from './PasswordReset';
 
 interface RecoveryCardProps {
   onBackToLogin?: () => void;
@@ -16,22 +15,12 @@ interface RecoveryCardProps {
 }
 
 export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
-  const [step, setStep] = useState<'request' | 'verify' | 'reset'>('request');
+  const [step, setStep] = useState<'request' | 'sent'>('request');
   const [account, setAccount] = useState('');
-  const [submittedAccount, setSubmittedAccount] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
-  const [resetToken, setResetToken] = useState('');
+  const [submittedEmail, setSubmittedEmail] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [resetCompleted, setResetCompleted] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const inputWrapperRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    return () => {
-      abortControllerRef.current?.abort();
-    };
-  }, []);
 
   const triggerShake = () => {
     if (
@@ -72,85 +61,37 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
       return;
     }
 
-    const result = processRecoverySubmission(account);
-    if (!result.submitted) {
-      setErrorMessage(result.error);
+    const validationError = requireEmailForFirebaseAuth(account);
+    if (validationError) {
+      setErrorMessage(validationError);
       triggerShake();
       return;
     }
 
+    const trimmedEmail = account.trim();
     setErrorMessage('');
     setIsSubmitting(true);
 
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
     try {
-      const trimmedAccount = account.trim();
-      const response = await fetch('/api/recovery', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({account: trimmedAccount}),
-        signal: controller.signal,
-      });
-
-      const data = (await response.json().catch(() => null)) as {
-        message?: string;
-        resetToken?: string;
-        error?: string;
-      } | null;
-
-      if (!response.ok) {
-        setErrorMessage(
-          data?.error || 'Unable to submit recovery request. Please try again.',
-        );
-        if (response.status === 400) {
-          triggerShake();
-        }
-        return;
-      }
-
-      setSubmittedAccount(trimmedAccount);
-      setResetToken(data?.resetToken || '');
-      setVerificationCode('');
-      setStep('verify');
-      onNotify?.(data?.message || result.message, 'Recovery link sent');
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return;
-      }
-      setErrorMessage('Network error while submitting recovery request.');
-    } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-        setIsSubmitting(false);
-      }
-    }
-  };
-
-  const handleVerifyCode = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const codeError = validateVerificationCode(verificationCode);
-    if (codeError) {
-      setErrorMessage(codeError);
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      setSubmittedEmail(trimmedEmail);
+      setStep('sent');
+      onNotify?.(
+        'Password reset email sent. Check your inbox to reset your password.',
+        'Recovery link sent',
+      );
+    } catch (error) {
+      setErrorMessage(mapFirebaseAuthError(error));
       triggerShake();
-      return;
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setErrorMessage('');
-    setStep('reset');
-    onNotify?.(CODE_VERIFIED_MESSAGE, 'Code verified');
   };
 
   const handleResetToRequest = () => {
     setStep('request');
-    setVerificationCode('');
-    setResetToken('');
+    setSubmittedEmail('');
     setErrorMessage('');
-    setResetCompleted(false);
   };
 
   return (
@@ -170,8 +111,8 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
             </h2>
 
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-              Enter your username or email address and we&apos;ll help you
-              recover your account.
+              Enter your email address and we&apos;ll send you a password reset
+              link via Firebase.
             </p>
 
             <form id="recoveryForm" onSubmit={handleSubmit} noValidate>
@@ -185,12 +126,13 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
                 }`}
               >
                 <input
-                  type="text"
+                  type="email"
                   id="account"
-                  aria-label="Username or email"
+                  autoComplete="email"
+                  aria-label="Email address"
                   aria-invalid={Boolean(errorMessage)}
                   aria-describedby={describedBy || undefined}
-                  placeholder="Username or email"
+                  placeholder="Email address"
                   maxLength={MAX_ACCOUNT_LENGTH}
                   readOnly={isSubmitting}
                   value={account}
@@ -270,114 +212,42 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
               </button>
             </form>
           </>
-        ) : step === 'verify' ? (
-          <>
-            <h2 className="text-[22px] font-bold mb-[15px]">
-              Enter verification code
-            </h2>
+        ) : (
+          <div key="reset-email-sent">
+            <h2 className="text-[22px] font-bold mb-[15px]">Check your email</h2>
+
+            <div className="flex justify-center mb-[15px]" aria-hidden="true">
+              <CheckCircle2 className="w-10 h-10 text-[#16803c]" />
+            </div>
 
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-              Enter the 6-digit verification code sent to{' '}
+              {LINK_SENT_MESSAGE} We sent a password reset email to{' '}
               <span className="font-semibold text-[#262626]">
-                {submittedAccount}
+                {submittedEmail}
               </span>
-              .
+              . Open the link in your inbox to set a new password.
             </p>
-
-            <form id="verificationForm" onSubmit={handleVerifyCode} noValidate>
-              <div
-                ref={inputWrapperRef}
-                data-testid="account-input-wrapper"
-                className={`relative ${errorMessage ? 'mb-[8px]' : 'mb-[15px]'}`}
-              >
-                <input
-                  type="text"
-                  id="verification-code"
-                  inputMode="numeric"
-                  aria-label="Verification code"
-                  aria-invalid={Boolean(errorMessage)}
-                  aria-describedby={errorMessage ? 'code-error' : undefined}
-                  placeholder="6-digit verification code"
-                  maxLength={VERIFICATION_CODE_LENGTH}
-                  value={verificationCode}
-                  onChange={(e) => {
-                    const digitsOnly = e.target.value
-                      .replace(/\D/g, '')
-                      .slice(0, VERIFICATION_CODE_LENGTH);
-                    setVerificationCode(digitsOnly);
-                    if (errorMessage) {
-                      setErrorMessage('');
-                    }
-                  }}
-                  required
-                  className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] tracking-[0.15em] outline-none ${
-                    errorMessage
-                      ? 'border-[#ed4956] focus:border-[#ed4956]'
-                      : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
-                  }`}
-                />
-                <KeyRound
-                  className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
-                    errorMessage
-                      ? 'text-[#ed4956]'
-                      : 'text-[#737373] peer-focus:text-[#262626]'
-                  }`}
-                  aria-hidden="true"
-                />
-              </div>
-
-              {errorMessage && (
-                <p
-                  id="code-error"
-                  role="alert"
-                  className="text-[#ed4956] text-[13px] text-left mb-[15px]"
-                >
-                  {errorMessage}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer transition-colors"
-              >
-                Verify Code
-              </button>
-            </form>
 
             <button
               type="button"
               onClick={handleResetToRequest}
-              className="block mx-auto mt-[20px] text-[#0095f6] hover:text-[#1877f2] bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
+              className="block mx-auto text-[#0095f6] hover:text-[#1877f2] bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
             >
-              Use a different account
+              Use a different email
             </button>
-          </>
-        ) : (
-          <PasswordReset
-            account={submittedAccount}
-            verificationCode={verificationCode}
-            resetToken={resetToken}
-            onBackToLogin={onBackToLogin}
-            onUseDifferentAccount={handleResetToRequest}
-            onResetSuccess={() => {
-              setResetCompleted(true);
-              onNotify?.('Your password has been updated.', 'Password updated');
-            }}
-          />
+          </div>
         )}
 
-        {!resetCompleted && (
-          <a
-            href="#login"
-            onClick={(e) => {
-              e.preventDefault();
-              onBackToLogin?.();
-            }}
-            className="inline-block mt-[30px] text-[#262626] no-underline text-[14px] font-bold hover:underline"
-          >
-            Back to login
-          </a>
-        )}
+        <a
+          href="#login"
+          onClick={(e) => {
+            e.preventDefault();
+            onBackToLogin?.();
+          }}
+          className="inline-block mt-[30px] text-[#262626] no-underline text-[14px] font-bold hover:underline"
+        >
+          Back to login
+        </a>
       </div>
     </main>
   );

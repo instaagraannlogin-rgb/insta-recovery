@@ -33,7 +33,10 @@ export default function App() {
           onNotify={showToast}
         />
       ) : (
-        <LoginCard onForgotPassword={() => setView('recovery')} />
+        <LoginCard
+          onForgotPassword={() => setView('recovery')}
+          onNotify={showToast}
+        />
       )}
       <RecoveryFooter />
     </div>

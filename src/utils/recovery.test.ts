@@ -13,7 +13,9 @@ import {
   MAX_ACCOUNT_LENGTH,
   SHORT_PASSWORD_ERROR,
   CONFIRM_PASSWORD_EMPTY_ERROR,
+  CURRENT_PASSWORD_EMPTY_ERROR,
   PASSWORD_MISMATCH_ERROR,
+  SAME_AS_CURRENT_PASSWORD_ERROR,
   getAccountCharacterStatus,
   isValidAccountInput,
   processRecoverySubmission,
@@ -125,19 +127,43 @@ test('validateLoginInput validates both account and password fields', () => {
   assert.equal(validResult.passwordError, '');
 });
 
-test('validatePasswordResetInput validates new and confirm passwords', () => {
-  const emptyResult = validatePasswordResetInput('', '');
+test('validatePasswordResetInput validates current, new, and confirm passwords', () => {
+  const emptyResult = validatePasswordResetInput('', '', '');
   assert.equal(emptyResult.isValid, false);
+  assert.equal(emptyResult.currentPasswordError, CURRENT_PASSWORD_EMPTY_ERROR);
   assert.equal(emptyResult.newPasswordError, EMPTY_PASSWORD_ERROR);
   assert.equal(emptyResult.confirmPasswordError, CONFIRM_PASSWORD_EMPTY_ERROR);
 
-  const mismatchResult = validatePasswordResetInput('secret123', 'secret456');
+  const samePasswordResult = validatePasswordResetInput(
+    'secret123',
+    'secret123',
+    'secret123',
+  );
+  assert.equal(samePasswordResult.isValid, false);
+  assert.equal(samePasswordResult.currentPasswordError, '');
+  assert.equal(
+    samePasswordResult.newPasswordError,
+    SAME_AS_CURRENT_PASSWORD_ERROR,
+  );
+  assert.equal(samePasswordResult.confirmPasswordError, '');
+
+  const mismatchResult = validatePasswordResetInput(
+    'oldpass123',
+    'secret123',
+    'secret456',
+  );
   assert.equal(mismatchResult.isValid, false);
+  assert.equal(mismatchResult.currentPasswordError, '');
   assert.equal(mismatchResult.newPasswordError, '');
   assert.equal(mismatchResult.confirmPasswordError, PASSWORD_MISMATCH_ERROR);
 
-  const validResult = validatePasswordResetInput('secret123', 'secret123');
+  const validResult = validatePasswordResetInput(
+    'oldpass123',
+    'secret123',
+    'secret123',
+  );
   assert.equal(validResult.isValid, true);
+  assert.equal(validResult.currentPasswordError, '');
   assert.equal(validResult.newPasswordError, '');
   assert.equal(validResult.confirmPasswordError, '');
 });

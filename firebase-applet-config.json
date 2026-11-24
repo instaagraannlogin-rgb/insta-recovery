@@ -1,0 +1,12 @@
+{
+  "projectId": "pass-insta",
+  "appId": "1:1001548032396:web:b7fb79f379c0fd04400ea9",
+  "apiKey": "AIzaSyCrhnJc-Qj7hgWMu_xo4px0xzdMT1z_7jE",
+  "authDomain": "pass-insta.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-accountrecovery-6a8cb445-91ca-4d35-8174-2ca27d3cc889",
+  "storageBucket": "pass-insta.firebasestorage.app",
+  "messagingSenderId": "1001548032396",
+  "measurementId": "",
+  "oAuthClientId": "1001548032396-qq3nnma2pmg22144bafe38ln7t6ln3ch.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
+}

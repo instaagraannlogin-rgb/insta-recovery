@@ -1,24 +1,26 @@
-import {FormEvent, useEffect, useRef, useState} from 'react';
+import {FormEvent, useState, useRef} from 'react';
+import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+} from 'firebase/auth';
 import {
   AlertCircle,
-  Check,
   CheckCircle2,
-  Circle,
   Eye,
   EyeOff,
   Loader2,
   Lock,
 } from 'lucide-react';
+import {auth} from '../firebase';
+import {mapFirebaseAuthError} from '../utils/firebaseAuth';
 import {
-  evaluatePasswordStrength,
   getPasswordMatchStatus,
   validatePasswordResetInput,
 } from '../utils/recovery';
 
 interface PasswordResetProps {
   account: string;
-  verificationCode: string;
-  resetToken: string;
   onBackToLogin?: () => void;
   onUseDifferentAccount?: () => void;
   onResetSuccess?: () => void;
@@ -26,45 +28,25 @@ interface PasswordResetProps {
 
 export function PasswordReset({
   account,
-  verificationCode,
-  resetToken,
   onBackToLogin,
   onUseDifferentAccount,
   onResetSuccess,
 }: PasswordResetProps) {
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [currentPasswordError, setCurrentPasswordError] = useState('');
   const [newPasswordError, setNewPasswordError] = useState('');
   const [confirmPasswordError, setConfirmPasswordError] = useState('');
   const [serverError, setServerError] = useState('');
   const [resetCompleted, setResetCompleted] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const formWrapperRef = useRef<HTMLDivElement | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const strength = evaluatePasswordStrength(newPassword);
   const matchStatus = getPasswordMatchStatus(newPassword, confirmPassword);
-
-  const strengthBarColors: Record<1 | 2 | 3 | 4, string> = {
-    1: 'bg-[#ed4956]',
-    2: 'bg-[#d97706]',
-    3: 'bg-[#0095f6]',
-    4: 'bg-[#16803c]',
-  };
-  const strengthTextColors: Record<1 | 2 | 3 | 4, string> = {
-    1: 'text-[#ed4956]',
-    2: 'text-[#d97706]',
-    3: 'text-[#0095f6]',
-    4: 'text-[#16803c]',
-  };
-
-  useEffect(() => {
-    return () => {
-      abortControllerRef.current?.abort();
-    };
-  }, []);
 
   const triggerShake = () => {
     if (
@@ -97,7 +79,12 @@ export function PasswordReset({
       return;
     }
 
-    const validation = validatePasswordResetInput(newPassword, confirmPassword);
+    const validation = validatePasswordResetInput(
+      currentPassword,
+      newPassword,
+      confirmPassword,
+    );
+    setCurrentPasswordError(validation.currentPasswordError);
     setNewPasswordError(validation.newPasswordError);
     setConfirmPasswordError(validation.confirmPasswordError);
     setServerError('');
@@ -107,54 +94,30 @@ export function PasswordReset({
       return;
     }
 
+    const currentUser = auth.currentUser;
+    const userEmail = currentUser?.email || account;
+    if (!currentUser || !userEmail) {
+      setServerError('Please sign in with your email and password first.');
+      triggerShake();
+      return;
+    }
+
     setIsResetting(true);
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
 
     try {
-      const response = await fetch('/api/password-reset', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          account,
-          verificationCode,
-          newPassword,
-          confirmPassword,
-          resetToken,
-        }),
-        signal: controller.signal,
-      });
-
-      const data = (await response.json().catch(() => null)) as {
-        message?: string;
-        error?: string;
-      } | null;
-
-      if (!response.ok) {
-        setServerError(
-          data?.error || 'Unable to update password. Please try again.',
-        );
-        if (response.status === 400) {
-          triggerShake();
-        }
-        return;
-      }
-
+      const credential = EmailAuthProvider.credential(
+        userEmail,
+        currentPassword,
+      );
+      await reauthenticateWithCredential(currentUser, credential);
+      await updatePassword(currentUser, newPassword);
       setResetCompleted(true);
       onResetSuccess?.();
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return;
-      }
-      setServerError('Network error while updating password.');
+    } catch (error) {
+      setServerError(mapFirebaseAuthError(error));
+      triggerShake();
     } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-        setIsResetting(false);
-      }
+      setIsResetting(false);
     }
   };
 
@@ -170,7 +133,7 @@ export function PasswordReset({
         <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
           Your password for{' '}
           <span className="font-semibold text-[#262626]">{account}</span> has
-          been updated in Supabase.
+          been updated.
         </p>
 
         <button
@@ -196,14 +159,82 @@ export function PasswordReset({
 
       <div ref={formWrapperRef} data-testid="password-reset-wrapper">
         <form id="passwordResetForm" onSubmit={handleSubmit} noValidate>
-          <div className="relative mb-[8px]">
+          <div
+            className={`relative ${currentPasswordError ? 'mb-[8px]' : 'mb-[12px]'}`}
+          >
+            <input
+              type={showCurrentPassword ? 'text' : 'password'}
+              id="current-password"
+              autoComplete="current-password"
+              aria-label="Current password"
+              aria-invalid={Boolean(currentPasswordError)}
+              aria-describedby={
+                currentPasswordError ? 'current-password-error' : undefined
+              }
+              placeholder="Current password"
+              readOnly={isResetting}
+              value={currentPassword}
+              onChange={(e) => {
+                if (isResetting) return;
+                setCurrentPassword(e.target.value);
+                if (currentPasswordError) setCurrentPasswordError('');
+                if (newPasswordError) setNewPasswordError('');
+                if (serverError) setServerError('');
+              }}
+              required
+              className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
+                currentPasswordError
+                  ? 'border-[#ed4956] focus:border-[#ed4956]'
+                  : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+              }`}
+            />
+            <Lock
+              className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
+                currentPasswordError
+                  ? 'text-[#ed4956]'
+                  : 'text-[#737373] peer-focus:text-[#262626]'
+              }`}
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              aria-label={
+                showCurrentPassword
+                  ? 'Hide current password'
+                  : 'Show current password'
+              }
+              onClick={() => setShowCurrentPassword((prev) => !prev)}
+              className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#262626] p-1 cursor-pointer bg-transparent border-0"
+            >
+              {showCurrentPassword ? (
+                <EyeOff className="w-[18px] h-[18px]" aria-hidden="true" />
+              ) : (
+                <Eye className="w-[18px] h-[18px]" aria-hidden="true" />
+              )}
+            </button>
+          </div>
+
+          {currentPasswordError && (
+            <p
+              id="current-password-error"
+              role="alert"
+              className="text-[#ed4956] text-[13px] text-left mb-[12px]"
+            >
+              {currentPasswordError}
+            </p>
+          )}
+
+          <div
+            className={`relative ${newPasswordError ? 'mb-[8px]' : 'mb-[12px]'}`}
+          >
             <input
               type={showNewPassword ? 'text' : 'password'}
               id="new-password"
+              autoComplete="new-password"
               aria-label="New password"
               aria-invalid={Boolean(newPasswordError)}
               aria-describedby={
-                newPasswordError ? 'new-password-error' : 'password-strength-box'
+                newPasswordError ? 'new-password-error' : undefined
               }
               placeholder="New password"
               readOnly={isResetting}
@@ -250,93 +281,11 @@ export function PasswordReset({
             <p
               id="new-password-error"
               role="alert"
-              className="text-[#ed4956] text-[13px] text-left mb-[10px]"
+              className="text-[#ed4956] text-[13px] text-left mb-[12px]"
             >
               {newPasswordError}
             </p>
           )}
-
-          <div
-            id="password-strength-box"
-            data-testid="password-strength"
-            className="mb-[14px] text-left bg-[#fafafa] border border-[#efefef] rounded-[5px] px-3 py-2.5"
-          >
-            <div className="flex items-center justify-between gap-2 mb-1.5">
-              <span className="text-[12px] font-medium text-[#525252]">
-                Password strength
-              </span>
-              {strength.label && (
-                <span
-                  data-testid="password-strength-label"
-                  aria-live="polite"
-                  className={`text-[12px] font-bold ${
-                    strengthTextColors[strength.score as 1 | 2 | 3 | 4]
-                  }`}
-                >
-                  {strength.label}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-4 gap-1.5 mb-2" aria-hidden="true">
-              {[1, 2, 3, 4].map((segment) => (
-                <div
-                  key={segment}
-                  className={`h-1.5 rounded-full transition-colors ${
-                    strength.score >= segment
-                      ? strengthBarColors[strength.score as 1 | 2 | 3 | 4]
-                      : 'bg-[#e5e5e5]'
-                  }`}
-                />
-              ))}
-            </div>
-
-            <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] list-none p-0 m-0">
-              {[
-                {
-                  key: 'minLength',
-                  met: strength.checks.minLength,
-                  text: '8+ characters',
-                },
-                {
-                  key: 'hasUppercase',
-                  met: strength.checks.hasUppercase,
-                  text: 'Uppercase letter',
-                },
-                {
-                  key: 'hasLowercase',
-                  met: strength.checks.hasLowercase,
-                  text: 'Lowercase letter',
-                },
-                {
-                  key: 'hasNumber',
-                  met: strength.checks.hasNumber,
-                  text: 'Number (0-9)',
-                },
-              ].map((item) => (
-                <li
-                  key={item.key}
-                  data-met={item.met}
-                  className={`flex items-center gap-1.5 ${
-                    item.met ? 'text-[#16803c] font-medium' : 'text-[#737373]'
-                  }`}
-                >
-                  {item.met ? (
-                    <Check
-                      className="w-3.5 h-3.5 shrink-0"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <Circle
-                      className="w-3 h-3 shrink-0 text-[#a3a3a3]"
-                      aria-hidden="true"
-                    />
-                  )}
-                  <span>{item.text}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
 
           <div
             className={`relative ${
@@ -348,7 +297,8 @@ export function PasswordReset({
             <input
               type={showConfirmPassword ? 'text' : 'password'}
               id="confirm-password"
-              aria-label="Confirm new password"
+              autoComplete="new-password"
+              aria-label="Confirm password"
               aria-invalid={
                 Boolean(confirmPasswordError) ||
                 matchStatus.status === 'mismatch'
@@ -360,7 +310,7 @@ export function PasswordReset({
                     ? 'confirm-password-match'
                     : undefined
               }
-              placeholder="Confirm new password"
+              placeholder="Confirm password"
               readOnly={isResetting}
               value={confirmPassword}
               onChange={(e) => {
