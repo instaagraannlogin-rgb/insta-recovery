@@ -322,6 +322,42 @@ export function validateContactSubmission(input: {
   };
 }
 
+export const OTP_LENGTH = 8;
+export const EMPTY_OTP_ERROR = 'Please enter the 8-digit verification code.';
+export const INVALID_OTP_ERROR = 'Verification code must be exactly 8 digits.';
+
+export function normalizeOtpInput(value: string): string {
+  return value.replace(/\D/g, '').slice(0, OTP_LENGTH);
+}
+
+export const otpCodeSchema = z
+  .string({error: EMPTY_OTP_ERROR})
+  .trim()
+  .superRefine((trimmed, ctx) => {
+    if (trimmed.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: EMPTY_OTP_ERROR,
+      });
+      return;
+    }
+
+    if (!/^\d{8}$/.test(trimmed)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: INVALID_OTP_ERROR,
+      });
+    }
+  });
+
+export function validateOtpCode(value: string): string {
+  const parsed = otpCodeSchema.safeParse(value);
+  if (parsed.success) {
+    return '';
+  }
+  return parsed.error.issues[0]?.message || INVALID_OTP_ERROR;
+}
+
 export function mapSupabaseAuthError(error: unknown, fallback: string): string {
   const rawMessage =
     typeof error === 'object' &&
@@ -337,6 +373,13 @@ export function mapSupabaseAuthError(error: unknown, fallback: string): string {
   }
   if (lower.includes('email not confirmed')) {
     return 'Please confirm your email address using the link sent to your inbox before signing in.';
+  }
+  if (
+    lower.includes('token has expired') ||
+    lower.includes('otp_expired') ||
+    lower.includes('invalid otp')
+  ) {
+    return 'That 8-digit code is invalid or has expired. Please request a new code.';
   }
   if (lower.includes('already registered') || lower.includes('already exists')) {
     return 'An account with this email address already exists.';

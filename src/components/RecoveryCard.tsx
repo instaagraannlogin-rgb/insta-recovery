@@ -1,11 +1,15 @@
+import type {Session} from '@supabase/supabase-js';
 import {FormEvent, useRef, useState} from 'react';
-import {CheckCircle2, Loader2, User} from 'lucide-react';
+import {CheckCircle2, KeyRound, Loader2, User} from 'lucide-react';
 import {
   LINK_SENT_MESSAGE,
   MAX_ACCOUNT_LENGTH,
+  OTP_LENGTH,
   getAccountCharacterStatus,
   mapSupabaseAuthError,
+  normalizeOtpInput,
   processRecoverySubmission,
+  validateOtpCode,
 } from '../utils/recovery';
 import {
   SUPABASE_NOT_CONFIGURED_ERROR,
@@ -14,25 +18,36 @@ import {
 
 interface RecoveryCardProps {
   onBackToLogin?: () => void;
+  onOtpVerified?: (session: Session | null, email: string) => void;
   onNotify?: (message: string, title?: string) => void;
 }
 
-export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
+export function RecoveryCard({
+  onBackToLogin,
+  onOtpVerified,
+  onNotify,
+}: RecoveryCardProps) {
   const [step, setStep] = useState<'request' | 'sent'>('request');
   const [email, setEmail] = useState('');
   const [submittedEmail, setSubmittedEmail] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const inputWrapperRef = useRef<HTMLDivElement | null>(null);
 
-  const triggerShake = () => {
+  const [otp, setOtp] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+
+  const inputWrapperRef = useRef<HTMLDivElement | null>(null);
+  const otpWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  const triggerShake = (el: HTMLDivElement | null) => {
     if (
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
     ) {
       return;
     }
-    const el = inputWrapperRef.current;
     if (el && typeof el.animate === 'function') {
       el.animate(
         [
@@ -67,7 +82,7 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
     const result = processRecoverySubmission(email);
     if (!result.submitted) {
       setErrorMessage(result.error);
-      triggerShake();
+      triggerShake(inputWrapperRef.current);
       return;
     }
 
@@ -97,11 +112,13 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
             'Unable to send password reset email. Please try again.',
           ),
         );
-        triggerShake();
+        triggerShake(inputWrapperRef.current);
         return;
       }
 
       setSubmittedEmail(trimmedEmail);
+      setOtp('');
+      setOtpError('');
       setStep('sent');
       onNotify?.(LINK_SENT_MESSAGE, 'Reset email sent');
     } catch {
@@ -111,9 +128,109 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
     }
   };
 
+  const handleVerifyOtp = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isVerifying) {
+      return;
+    }
+
+    const validationError = validateOtpCode(otp);
+    if (validationError) {
+      setOtpError(validationError);
+      triggerShake(otpWrapperRef.current);
+      return;
+    }
+
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      setOtpError(SUPABASE_NOT_CONFIGURED_ERROR);
+      return;
+    }
+
+    setOtpError('');
+    setIsVerifying(true);
+
+    try {
+      const {data, error} = await supabase.auth.verifyOtp({
+        email: submittedEmail,
+        token: otp,
+        type: 'recovery',
+      });
+
+      if (error) {
+        setOtpError(
+          mapSupabaseAuthError(
+            error,
+            'Invalid or expired verification code. Please try again.',
+          ),
+        );
+        triggerShake(otpWrapperRef.current);
+        return;
+      }
+
+      setOtp('');
+      onNotify?.(
+        'Verification code confirmed. Set your new password.',
+        'Code verified',
+      );
+      onOtpVerified?.(data.session ?? null, submittedEmail);
+    } catch {
+      setOtpError('Network error while verifying code.');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (isResending || !submittedEmail) {
+      return;
+    }
+
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      setOtpError(SUPABASE_NOT_CONFIGURED_ERROR);
+      return;
+    }
+
+    setOtpError('');
+    setIsResending(true);
+
+    try {
+      const redirectTo =
+        typeof window !== 'undefined'
+          ? `${window.location.origin}/#reset-password`
+          : undefined;
+      const {error} = await supabase.auth.resetPasswordForEmail(
+        submittedEmail,
+        {redirectTo},
+      );
+
+      if (error) {
+        setOtpError(
+          mapSupabaseAuthError(
+            error,
+            'Unable to resend verification code. Please try again.',
+          ),
+        );
+        return;
+      }
+
+      onNotify?.(
+        `A new 8-digit verification code was sent to ${submittedEmail}.`,
+        'Code resent',
+      );
+    } catch {
+      setOtpError('Network error while resending verification code.');
+    } finally {
+      setIsResending(false);
+    }
+  };
+
   const handleResetToRequest = () => {
     setStep('request');
     setSubmittedEmail('');
+    setOtp('');
+    setOtpError('');
     setErrorMessage('');
   };
 
@@ -134,8 +251,8 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
             </h2>
 
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-              Enter your email address and we&apos;ll send you a password reset
-              link.
+              Enter your email address and we&apos;ll send you an 8-digit
+              verification code.
             </p>
 
             <form id="recoveryForm" onSubmit={handleSubmit} noValidate>
@@ -243,21 +360,114 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
               <CheckCircle2 className="w-10 h-10 text-[#16803c]" />
             </div>
 
-            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-              {LINK_SENT_MESSAGE} Check{' '}
+            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[20px]">
+              {LINK_SENT_MESSAGE} Enter the 8-digit code sent to{' '}
               <span className="font-semibold text-[#262626]">
                 {submittedEmail}
-              </span>{' '}
-              and open the recovery link to set a new password.
+              </span>
+              .
             </p>
 
-            <button
-              type="button"
-              onClick={handleResetToRequest}
-              className="block mx-auto text-[#0095f6] hover:text-[#1877f2] bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
-            >
-              Use a different email
-            </button>
+            <form id="otpVerificationForm" onSubmit={handleVerifyOtp} noValidate>
+              <div
+                ref={otpWrapperRef}
+                data-testid="otp-input-wrapper"
+                className="relative mb-[8px]"
+              >
+                <input
+                  type="text"
+                  id="recovery-otp"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  aria-label="8-digit verification code"
+                  aria-invalid={Boolean(otpError)}
+                  aria-describedby={otpError ? 'otp-error' : 'otp-counter'}
+                  placeholder="Enter 8-digit code"
+                  maxLength={OTP_LENGTH}
+                  readOnly={isVerifying}
+                  value={otp}
+                  onChange={(e) => {
+                    if (isVerifying) return;
+                    setOtp(normalizeOtpInput(e.target.value));
+                    if (otpError) setOtpError('');
+                  }}
+                  required
+                  className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[15px] tracking-[0.18em] tabular-nums outline-none ${
+                    otpError
+                      ? 'border-[#ed4956] focus:border-[#ed4956]'
+                      : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                  }`}
+                />
+                <KeyRound
+                  className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
+                    otpError
+                      ? 'text-[#ed4956]'
+                      : 'text-[#737373] peer-focus:text-[#262626]'
+                  }`}
+                  aria-hidden="true"
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-2 mb-[15px]">
+                {otpError ? (
+                  <p
+                    id="otp-error"
+                    role="alert"
+                    className="text-[#ed4956] text-[13px] text-left"
+                  >
+                    {otpError}
+                  </p>
+                ) : (
+                  <span />
+                )}
+                <span
+                  id="otp-counter"
+                  className="text-[12px] text-[#737373] tabular-nums whitespace-nowrap"
+                >
+                  {otp.length}/{OTP_LENGTH} digits
+                </span>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isVerifying}
+                aria-busy={isVerifying}
+                className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors mb-[14px]"
+              >
+                {isVerifying ? (
+                  <>
+                    <Loader2
+                      className="w-4 h-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                    <span>Verifying...</span>
+                  </>
+                ) : (
+                  'Verify code'
+                )}
+              </button>
+            </form>
+
+            <div className="flex items-center justify-center gap-4">
+              <button
+                type="button"
+                disabled={isResending}
+                onClick={handleResendCode}
+                className="text-[#0095f6] hover:text-[#1877f2] disabled:opacity-60 bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
+              >
+                {isResending ? 'Resending...' : 'Resend code'}
+              </button>
+              <span className="text-[#dbdbdb]" aria-hidden="true">
+                |
+              </span>
+              <button
+                type="button"
+                onClick={handleResetToRequest}
+                className="text-[#0095f6] hover:text-[#1877f2] bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
+              >
+                Use a different email
+              </button>
+            </div>
           </div>
         )}
 

@@ -172,3 +172,13 @@ test('getPasswordMatchStatus reports idle, mismatch, and match in real time', ()
     message: 'Passwords match',
   });
 });
+
+test('validateOtpCode and normalizeOtpInput enforce 8-digit numeric OTPs', async () => {
+  const mod = await import('./recovery');
+  assert.equal(mod.OTP_LENGTH, 8);
+  assert.equal(mod.normalizeOtpInput('12a34-567890'), '12345678');
+  assert.equal(mod.validateOtpCode(''), mod.EMPTY_OTP_ERROR);
+  assert.equal(mod.validateOtpCode('123456'), mod.INVALID_OTP_ERROR);
+  assert.equal(mod.validateOtpCode('1234567a'), mod.INVALID_OTP_ERROR);
+  assert.equal(mod.validateOtpCode('12345678'), '');
+});

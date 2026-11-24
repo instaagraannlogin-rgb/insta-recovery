@@ -32,6 +32,8 @@ export default function App() {
   const [view, setView] = useState<AppView>(() =>
     isRecoveryUrl() ? 'reset' : 'recovery',
   );
+  const viewRef = useRef<AppView>(view);
+  viewRef.current = view;
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [toast, setToast] = useState<ToastData | null>(null);
@@ -80,7 +82,11 @@ export default function App() {
           if (event === 'PASSWORD_RECOVERY') {
             setView('reset');
           } else if (event === 'SIGNED_IN' && nextSession) {
-            setView((prev) => (prev === 'reset' ? 'reset' : 'dashboard'));
+            setView(
+              viewRef.current === 'recovery' || viewRef.current === 'reset'
+                ? 'reset'
+                : 'dashboard',
+            );
           } else if (event === 'SIGNED_OUT') {
             setView('login');
           }
@@ -129,6 +135,12 @@ export default function App() {
       ) : view === 'recovery' ? (
         <RecoveryCard
           onBackToLogin={() => setView('login')}
+          onOtpVerified={(nextSession) => {
+            if (nextSession) {
+              setSession(nextSession);
+            }
+            setView('reset');
+          }}
           onNotify={showToast}
         />
       ) : view === 'reset' ? (
