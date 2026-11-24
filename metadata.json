@@ -1,0 +1,6 @@
+{
+  "name": "Account Recovery",
+  "description": "Account Recovery Demo page for entering a username or email to recover an account.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
