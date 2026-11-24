@@ -1,13 +1,16 @@
 import {FormEvent, useRef, useState} from 'react';
-import {sendPasswordResetEmail} from 'firebase/auth';
 import {CheckCircle2, Loader2, User} from 'lucide-react';
-import {auth} from '../firebase';
-import {mapFirebaseAuthError, requireEmailForFirebaseAuth} from '../utils/firebaseAuth';
 import {
   LINK_SENT_MESSAGE,
   MAX_ACCOUNT_LENGTH,
   getAccountCharacterStatus,
+  mapSupabaseAuthError,
+  processRecoverySubmission,
 } from '../utils/recovery';
+import {
+  SUPABASE_NOT_CONFIGURED_ERROR,
+  getSupabaseClient,
+} from '../utils/supabaseClient';
 
 interface RecoveryCardProps {
   onBackToLogin?: () => void;
@@ -16,7 +19,7 @@ interface RecoveryCardProps {
 
 export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
   const [step, setStep] = useState<'request' | 'sent'>('request');
-  const [account, setAccount] = useState('');
+  const [email, setEmail] = useState('');
   const [submittedEmail, setSubmittedEmail] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -47,7 +50,7 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
     }
   };
 
-  const charStatus = getAccountCharacterStatus(account);
+  const charStatus = getAccountCharacterStatus(email);
   const describedBy = [
     errorMessage ? 'account-error' : '',
     charStatus.showCounter ? 'account-counter' : '',
@@ -61,28 +64,48 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
       return;
     }
 
-    const validationError = requireEmailForFirebaseAuth(account);
-    if (validationError) {
-      setErrorMessage(validationError);
+    const result = processRecoverySubmission(email);
+    if (!result.submitted) {
+      setErrorMessage(result.error);
       triggerShake();
       return;
     }
 
-    const trimmedEmail = account.trim();
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      setErrorMessage(SUPABASE_NOT_CONFIGURED_ERROR);
+      return;
+    }
+
+    const trimmedEmail = email.trim();
     setErrorMessage('');
     setIsSubmitting(true);
 
     try {
-      await sendPasswordResetEmail(auth, trimmedEmail);
+      const redirectTo =
+        typeof window !== 'undefined'
+          ? `${window.location.origin}/#reset-password`
+          : undefined;
+      const {error} = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+        redirectTo,
+      });
+
+      if (error) {
+        setErrorMessage(
+          mapSupabaseAuthError(
+            error,
+            'Unable to send password reset email. Please try again.',
+          ),
+        );
+        triggerShake();
+        return;
+      }
+
       setSubmittedEmail(trimmedEmail);
       setStep('sent');
-      onNotify?.(
-        'Password reset email sent. Check your inbox to reset your password.',
-        'Recovery link sent',
-      );
-    } catch (error) {
-      setErrorMessage(mapFirebaseAuthError(error));
-      triggerShake();
+      onNotify?.(LINK_SENT_MESSAGE, 'Reset email sent');
+    } catch {
+      setErrorMessage('Network error while requesting password reset.');
     } finally {
       setIsSubmitting(false);
     }
@@ -112,7 +135,7 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
 
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
               Enter your email address and we&apos;ll send you a password reset
-              link via Firebase.
+              link.
             </p>
 
             <form id="recoveryForm" onSubmit={handleSubmit} noValidate>
@@ -135,12 +158,12 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
                   placeholder="Email address"
                   maxLength={MAX_ACCOUNT_LENGTH}
                   readOnly={isSubmitting}
-                  value={account}
+                  value={email}
                   onChange={(e) => {
                     if (isSubmitting) {
                       return;
                     }
-                    setAccount(e.target.value.slice(0, MAX_ACCOUNT_LENGTH));
+                    setEmail(e.target.value.slice(0, MAX_ACCOUNT_LENGTH));
                     if (errorMessage) {
                       setErrorMessage('');
                     }
@@ -221,11 +244,11 @@ export function RecoveryCard({onBackToLogin, onNotify}: RecoveryCardProps) {
             </div>
 
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-              {LINK_SENT_MESSAGE} We sent a password reset email to{' '}
+              {LINK_SENT_MESSAGE} Check{' '}
               <span className="font-semibold text-[#262626]">
                 {submittedEmail}
-              </span>
-              . Open the link in your inbox to set a new password.
+              </span>{' '}
+              and open the recovery link to set a new password.
             </p>
 
             <button

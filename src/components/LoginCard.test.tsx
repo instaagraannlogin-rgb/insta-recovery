@@ -1,152 +1,119 @@
-import {act, render, screen, waitFor} from '@testing-library/react';
+import {render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {FirebaseError} from 'firebase/app';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-import {EMPTY_PASSWORD_ERROR, INVALID_EMAIL_ERROR} from '../utils/recovery';
+import {
+  EMPTY_ACCOUNT_ERROR,
+  EMPTY_PASSWORD_ERROR,
+  INVALID_EMAIL_ERROR,
+} from '../utils/recovery';
 
-const {
-  mockAuth,
-  authListeners,
-  signInWithEmailAndPasswordMock,
-  createUserWithEmailAndPasswordMock,
-  signOutMock,
-  onAuthStateChangedMock,
-} = vi.hoisted(() => {
-  const listeners = new Set<(user: {email: string} | null) => void>();
-  const authObj = {currentUser: null as {email: string} | null};
-  return {
-    mockAuth: authObj,
-    authListeners: listeners,
-    signInWithEmailAndPasswordMock: vi.fn(),
-    createUserWithEmailAndPasswordMock: vi.fn(),
-    signOutMock: vi.fn(),
-    onAuthStateChangedMock: vi.fn(
-      (_auth: unknown, cb: (user: {email: string} | null) => void) => {
-        listeners.add(cb);
-        cb(authObj.currentUser);
-        return () => {
-          listeners.delete(cb);
-        };
-      },
-    ),
-  };
-});
-
-vi.mock('../firebase', () => ({
-  auth: mockAuth,
+const {signInWithPasswordMock, signUpMock} = vi.hoisted(() => ({
+  signInWithPasswordMock: vi.fn(),
+  signUpMock: vi.fn(),
 }));
 
-vi.mock('firebase/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('firebase/auth')>();
-  return {
-    ...actual,
-    signInWithEmailAndPassword: signInWithEmailAndPasswordMock,
-    createUserWithEmailAndPassword: createUserWithEmailAndPasswordMock,
-    signOut: signOutMock,
-    onAuthStateChanged: onAuthStateChangedMock,
-  };
-});
+vi.mock('../utils/supabaseClient', () => ({
+  SUPABASE_NOT_CONFIGURED_ERROR: 'Supabase is not configured.',
+  getSupabaseClient: vi.fn(async () => ({
+    auth: {
+      signInWithPassword: signInWithPasswordMock,
+      signUp: signUpMock,
+    },
+  })),
+}));
 
 import {LoginCard} from './LoginCard';
 
 describe('LoginCard', () => {
   beforeEach(() => {
-    mockAuth.currentUser = null;
-    authListeners.clear();
-    signInWithEmailAndPasswordMock.mockReset();
-    createUserWithEmailAndPasswordMock.mockReset();
-    signOutMock.mockReset();
-    onAuthStateChangedMock.mockClear();
+    signInWithPasswordMock.mockReset();
+    signUpMock.mockReset();
   });
 
-  it('validates email and password fields before calling Firebase Auth', async () => {
+  it('validates email and password before calling Supabase Auth', async () => {
     const user = userEvent.setup();
     render(<LoginCard onForgotPassword={vi.fn()} />);
 
-    await user.type(screen.getByLabelText('Email address'), 'alex_dev');
     await user.click(screen.getByRole('button', {name: 'Log In'}));
-
     const alerts = screen.getAllByRole('alert');
-    expect(alerts[0]).toHaveTextContent(INVALID_EMAIL_ERROR);
+    expect(alerts[0]).toHaveTextContent(EMPTY_ACCOUNT_ERROR);
     expect(alerts[1]).toHaveTextContent(EMPTY_PASSWORD_ERROR);
-    expect(signInWithEmailAndPasswordMock).not.toHaveBeenCalled();
+    expect(signInWithPasswordMock).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText('Email address'), 'bad@');
+    await user.type(screen.getByLabelText('Password'), 'Secret123');
+    await user.click(screen.getByRole('button', {name: 'Log In'}));
+    expect(screen.getByRole('alert')).toHaveTextContent(INVALID_EMAIL_ERROR);
+    expect(signInWithPasswordMock).not.toHaveBeenCalled();
   });
 
-  it('signs in with Firebase Email/Password, displays signed-in state, and signs out', async () => {
+  it('signs in with Supabase Auth and calls onAuthSuccess', async () => {
     const user = userEvent.setup();
+    const onAuthSuccess = vi.fn();
     const onNotify = vi.fn();
+    signInWithPasswordMock.mockResolvedValueOnce({data: {}, error: null});
 
-    signInWithEmailAndPasswordMock.mockImplementation(
-      async (_auth, email: string) => {
-        mockAuth.currentUser = {email};
-        for (const cb of authListeners) {
-          cb({email});
-        }
-        return {user: {email}};
-      },
+    render(
+      <LoginCard
+        onForgotPassword={vi.fn()}
+        onAuthSuccess={onAuthSuccess}
+        onNotify={onNotify}
+      />,
     );
-    signOutMock.mockImplementation(async () => {
-      mockAuth.currentUser = null;
-      for (const cb of authListeners) {
-        cb(null);
-      }
-    });
 
-    render(<LoginCard onForgotPassword={vi.fn()} onNotify={onNotify} />);
-
-    await user.type(screen.getByLabelText('Email address'), 'alex@example.com');
+    await user.type(
+      screen.getByLabelText('Email address'),
+      '  alex@example.com  ',
+    );
     await user.type(screen.getByLabelText('Password'), 'Secret123');
     await user.click(screen.getByRole('button', {name: 'Log In'}));
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('heading', {name: 'Signed in'}),
-      ).toBeInTheDocument();
+      expect(signInWithPasswordMock).toHaveBeenCalledWith({
+        email: 'alex@example.com',
+        password: 'Secret123',
+      });
     });
-    expect(signInWithEmailAndPasswordMock).toHaveBeenCalledWith(
-      mockAuth,
-      'alex@example.com',
-      'Secret123',
-    );
+    expect(onAuthSuccess).toHaveBeenCalledTimes(1);
     expect(onNotify).toHaveBeenCalledWith(
       'Signed in as alex@example.com.',
-      'Signed in',
+      'Welcome back',
     );
-
-    await user.click(screen.getByRole('button', {name: 'Sign out'}));
-    await waitFor(() => {
-      expect(screen.getByRole('heading', {name: 'Sign in'})).toBeInTheDocument();
-    });
   });
 
-  it('supports creating a new account and surfaces Firebase Auth errors', async () => {
+  it('supports Sign Up with email confirmation feedback and error messages', async () => {
     const user = userEvent.setup();
-    createUserWithEmailAndPasswordMock.mockRejectedValueOnce(
-      new FirebaseError('auth/email-already-in-use', 'Already in use'),
-    );
+    signUpMock.mockResolvedValueOnce({
+      data: {user: {id: 'u1'}, session: null},
+      error: null,
+    });
 
     render(<LoginCard onForgotPassword={vi.fn()} />);
 
     await user.click(
-      screen.getByRole('button', {name: 'Need an account? Create one'}),
+      screen.getByRole('button', {name: "Don't have an account? Sign up"}),
     );
     expect(
       screen.getByRole('heading', {name: 'Create account'}),
     ).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText('Email address'), 'alex@example.com');
+    await user.type(screen.getByLabelText('Email address'), 'new@example.com');
     await user.type(screen.getByLabelText('Password'), 'Secret123');
-    await user.click(screen.getByRole('button', {name: 'Create Account'}));
+    await user.click(screen.getByRole('button', {name: 'Sign Up'}));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /already exists/i,
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /Please check your inbox and confirm your email address/i,
     );
-
-    await act(async () => {
-      await user.click(
-        screen.getByRole('button', {name: 'Already have an account? Sign in'}),
-      );
-    });
     expect(screen.getByRole('heading', {name: 'Sign in'})).toBeInTheDocument();
+
+    signInWithPasswordMock.mockResolvedValueOnce({
+      data: {},
+      error: {message: 'Invalid login credentials'},
+    });
+    await user.type(screen.getByLabelText('Password'), 'Wrong123');
+    await user.click(screen.getByRole('button', {name: 'Log In'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Invalid email or password/i,
+    );
   });
 });

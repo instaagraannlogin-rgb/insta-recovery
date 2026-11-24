@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {AddressInfo} from 'node:net';
-import {createApp} from '../../server.ts';
+import {createApp, resolvePublicSupabaseConfig} from '../../server.ts';
 
 async function withServer(
   fn: (baseUrl: string) => Promise<void>,
@@ -21,29 +21,88 @@ async function withServer(
   }
 }
 
-test('GET /api/health returns 200 ok', async () => {
-  await withServer(async (baseUrl) => {
-    const res = await fetch(`${baseUrl}/api/health`);
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as {status: string};
-    assert.equal(body.status, 'ok');
-  });
+test('resolvePublicSupabaseConfig normalizes HTTPS URLs and never reads service role keys', () => {
+  const keys = [
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    'VITE_SUPABASE_ANON_KEY',
+    'SUPABASE_URL',
+    'SUPABASE_PROJECT_ID',
+    'SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_ANON_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
+  ] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+
+  try {
+    for (const k of keys) delete process.env[k];
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'secret_service_role_must_be_ignored';
+    assert.equal(resolvePublicSupabaseConfig(), null);
+
+    process.env.VITE_SUPABASE_URL = 'https://example-proj.supabase.co/';
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test';
+    assert.deepEqual(resolvePublicSupabaseConfig(), {
+      url: 'https://example-proj.supabase.co',
+      publishableKey: 'sb_publishable_test',
+    });
+
+    process.env.VITE_SUPABASE_URL = 'http://insecure.example.com';
+    assert.equal(resolvePublicSupabaseConfig(), null);
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 });
 
-test('server does not expose database password or reset-token storage endpoints', async () => {
-  await withServer(async (baseUrl) => {
-    const recoveryRes = await fetch(`${baseUrl}/api/recovery`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({account: 'user@example.com'}),
-    });
-    assert.equal(recoveryRes.status, 404);
+test('GET /api/supabase-config returns configured: false when unconfigured and public config when configured', async () => {
+  const keys = [
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    'VITE_SUPABASE_ANON_KEY',
+    'SUPABASE_URL',
+    'SUPABASE_PROJECT_ID',
+    'SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_ANON_KEY',
+  ] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
 
-    const resetRes = await fetch(`${baseUrl}/api/password-reset`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({account: 'user@example.com'}),
+  try {
+    for (const k of keys) delete process.env[k];
+    await withServer(async (baseUrl) => {
+      const missingRes = await fetch(`${baseUrl}/api/supabase-config`);
+      assert.equal(missingRes.status, 200);
+      const missingBody = (await missingRes.json()) as {
+        configured: boolean;
+        url: string | null;
+        publishableKey: string | null;
+      };
+      assert.deepEqual(missingBody, {
+        configured: false,
+        url: null,
+        publishableKey: null,
+      });
+
+      process.env.SUPABASE_URL = 'https://example-proj.supabase.co';
+      process.env.SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test';
+      const okRes = await fetch(`${baseUrl}/api/supabase-config`);
+      assert.equal(okRes.status, 200);
+      const body = (await okRes.json()) as {
+        configured: boolean;
+        url: string;
+        publishableKey: string;
+      };
+      assert.deepEqual(body, {
+        configured: true,
+        url: 'https://example-proj.supabase.co',
+        publishableKey: 'sb_publishable_test',
+      });
     });
-    assert.equal(resetRes.status, 404);
-  });
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 });

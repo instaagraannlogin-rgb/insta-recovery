@@ -18,23 +18,19 @@ export interface CharacterLimitStatus {
 export const MAX_ACCOUNT_LENGTH = 64;
 export const APPROACHING_LIMIT_THRESHOLD = 50;
 
-export const LINK_SENT_MESSAGE = 'Link sent successfully.';
+export const LINK_SENT_MESSAGE =
+  'If an account exists for this email, a password reset link has been sent.';
 
-export const EMPTY_ACCOUNT_ERROR =
-  'Please enter your username or email address.';
+export const EMPTY_ACCOUNT_ERROR = 'Please enter your email address.';
 
 export const ACCOUNT_TOO_LONG_ERROR =
-  'Username or email must be 64 characters or fewer.';
+  'Email address must be 64 characters or fewer.';
 
 export const INVALID_EMAIL_ERROR = 'Please enter a valid email address.';
 
-export const INVALID_USERNAME_ERROR =
-  'Username must be at least 3 characters and use only letters, numbers, dots, underscores, or hyphens.';
-
-const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,}$/;
 const emailValidator = z.email({error: INVALID_EMAIL_ERROR});
 
-export const accountSchema = z
+export const emailSchema = z
   .string({error: EMPTY_ACCOUNT_ERROR})
   .trim()
   .superRefine((trimmed, ctx) => {
@@ -54,27 +50,17 @@ export const accountSchema = z
       return;
     }
 
-    if (trimmed.includes('@')) {
-      const emailCheck = emailValidator.safeParse(trimmed);
-      if (!emailCheck.success) {
-        ctx.addIssue({
-          code: 'custom',
-          message: INVALID_EMAIL_ERROR,
-        });
-      }
-      return;
-    }
-
-    if (!USERNAME_PATTERN.test(trimmed)) {
+    const emailCheck = emailValidator.safeParse(trimmed);
+    if (!emailCheck.success) {
       ctx.addIssue({
         code: 'custom',
-        message: INVALID_USERNAME_ERROR,
+        message: INVALID_EMAIL_ERROR,
       });
     }
   });
 
 export const recoveryFormSchema = z.object({
-  account: accountSchema,
+  email: emailSchema,
 });
 
 export function getAccountCharacterStatus(
@@ -96,27 +82,27 @@ export function getAccountCharacterStatus(
   };
 }
 
-export function validateAccountInput(value: string): string {
-  const parsed = recoveryFormSchema.safeParse({account: value});
+export function validateEmailInput(value: string): string {
+  const parsed = recoveryFormSchema.safeParse({email: value});
   if (parsed.success) {
     return '';
   }
-  return parsed.error.issues[0]?.message || INVALID_USERNAME_ERROR;
+  return parsed.error.issues[0]?.message || INVALID_EMAIL_ERROR;
 }
 
-export function isValidAccountInput(value: string): boolean {
-  return recoveryFormSchema.safeParse({account: value}).success;
+export function isValidEmailInput(value: string): boolean {
+  return recoveryFormSchema.safeParse({email: value}).success;
 }
 
 export function processRecoverySubmission(
-  account: string,
+  email: string,
 ): RecoverySubmissionResult {
-  const parsed = recoveryFormSchema.safeParse({account});
+  const parsed = recoveryFormSchema.safeParse({email});
   if (!parsed.success) {
     return {
       submitted: false,
       message: '',
-      error: parsed.error.issues[0]?.message || INVALID_USERNAME_ERROR,
+      error: parsed.error.issues[0]?.message || INVALID_EMAIL_ERROR,
     };
   }
 
@@ -125,41 +111,6 @@ export function processRecoverySubmission(
     message: LINK_SENT_MESSAGE,
     error: '',
   };
-}
-
-export const VERIFICATION_CODE_LENGTH = 6;
-export const EMPTY_CODE_ERROR = 'Please enter the 6-digit verification code.';
-export const INVALID_CODE_ERROR = 'Verification code must be 6 digits.';
-export const CODE_VERIFIED_MESSAGE =
-  'Verification code confirmed. You can now set a new password.';
-
-const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
-
-export const verificationCodeSchema = z
-  .string({error: EMPTY_CODE_ERROR})
-  .trim()
-  .superRefine((trimmed, ctx) => {
-    if (trimmed.length === 0) {
-      ctx.addIssue({
-        code: 'custom',
-        message: EMPTY_CODE_ERROR,
-      });
-      return;
-    }
-    if (!VERIFICATION_CODE_PATTERN.test(trimmed)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: INVALID_CODE_ERROR,
-      });
-    }
-  });
-
-export function validateVerificationCode(code: string): string {
-  const parsed = verificationCodeSchema.safeParse(code);
-  if (parsed.success) {
-    return '';
-  }
-  return parsed.error.issues[0]?.message || INVALID_CODE_ERROR;
 }
 
 export const MIN_PASSWORD_LENGTH = 6;
@@ -173,71 +124,53 @@ export const passwordSchema = z
   .min(MIN_PASSWORD_LENGTH, {error: SHORT_PASSWORD_ERROR});
 
 export const loginFormSchema = z.object({
-  account: accountSchema,
+  email: emailSchema,
   password: passwordSchema,
 });
 
 export interface LoginValidationResult {
-  accountError: string;
+  emailError: string;
   passwordError: string;
   isValid: boolean;
 }
 
 export function validateLoginInput(
-  account: string,
+  email: string,
   password: string,
 ): LoginValidationResult {
-  const parsed = loginFormSchema.safeParse({account, password});
+  const parsed = loginFormSchema.safeParse({email, password});
   if (parsed.success) {
-    return {accountError: '', passwordError: '', isValid: true};
+    return {emailError: '', passwordError: '', isValid: true};
   }
 
-  let accountError = '';
+  let emailError = '';
   let passwordError = '';
   for (const issue of parsed.error.issues) {
-    if (issue.path[0] === 'account' && !accountError) {
-      accountError = issue.message;
+    if (issue.path[0] === 'email' && !emailError) {
+      emailError = issue.message;
     } else if (issue.path[0] === 'password' && !passwordError) {
       passwordError = issue.message;
     }
   }
 
   return {
-    accountError,
+    emailError,
     passwordError,
     isValid: false,
   };
 }
 
-export const CURRENT_PASSWORD_EMPTY_ERROR =
-  'Please enter your current password.';
-export const SAME_AS_CURRENT_PASSWORD_ERROR =
-  'New password must be different from your current password.';
 export const CONFIRM_PASSWORD_EMPTY_ERROR = 'Please confirm your new password.';
 export const PASSWORD_MISMATCH_ERROR = 'Passwords do not match.';
 
 export const passwordResetSchema = z
   .object({
-    currentPassword: z
-      .string({error: CURRENT_PASSWORD_EMPTY_ERROR})
-      .min(1, {error: CURRENT_PASSWORD_EMPTY_ERROR}),
     newPassword: passwordSchema,
     confirmPassword: z
       .string({error: CONFIRM_PASSWORD_EMPTY_ERROR})
       .min(1, {error: CONFIRM_PASSWORD_EMPTY_ERROR}),
   })
   .superRefine((data, ctx) => {
-    if (
-      data.currentPassword.length > 0 &&
-      data.newPassword.length >= MIN_PASSWORD_LENGTH &&
-      data.newPassword === data.currentPassword
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['newPassword'],
-        message: SAME_AS_CURRENT_PASSWORD_ERROR,
-      });
-    }
     if (
       data.confirmPassword.length > 0 &&
       data.newPassword !== data.confirmPassword
@@ -251,38 +184,31 @@ export const passwordResetSchema = z
   });
 
 export interface PasswordResetValidationResult {
-  currentPasswordError: string;
   newPasswordError: string;
   confirmPasswordError: string;
   isValid: boolean;
 }
 
 export function validatePasswordResetInput(
-  currentPassword: string,
   newPassword: string,
   confirmPassword: string,
 ): PasswordResetValidationResult {
   const parsed = passwordResetSchema.safeParse({
-    currentPassword,
     newPassword,
     confirmPassword,
   });
   if (parsed.success) {
     return {
-      currentPasswordError: '',
       newPasswordError: '',
       confirmPasswordError: '',
       isValid: true,
     };
   }
 
-  let currentPasswordError = '';
   let newPasswordError = '';
   let confirmPasswordError = '';
   for (const issue of parsed.error.issues) {
-    if (issue.path[0] === 'currentPassword' && !currentPasswordError) {
-      currentPasswordError = issue.message;
-    } else if (issue.path[0] === 'newPassword' && !newPasswordError) {
+    if (issue.path[0] === 'newPassword' && !newPasswordError) {
       newPasswordError = issue.message;
     } else if (issue.path[0] === 'confirmPassword' && !confirmPasswordError) {
       confirmPasswordError = issue.message;
@@ -290,73 +216,9 @@ export function validatePasswordResetInput(
   }
 
   return {
-    currentPasswordError,
     newPasswordError,
     confirmPasswordError,
     isValid: false,
-  };
-}
-
-export type PasswordStrengthLabel = '' | 'Weak' | 'Fair' | 'Good' | 'Strong';
-
-export interface PasswordStrengthResult {
-  score: 0 | 1 | 2 | 3 | 4;
-  label: PasswordStrengthLabel;
-  checks: {
-    minLength: boolean;
-    hasUppercase: boolean;
-    hasLowercase: boolean;
-    hasNumber: boolean;
-  };
-}
-
-export const STRENGTH_MIN_LENGTH = 8;
-
-export function evaluatePasswordStrength(
-  password: string,
-): PasswordStrengthResult {
-  const checks = {
-    minLength: password.length >= STRENGTH_MIN_LENGTH,
-    hasUppercase: /[A-Z]/.test(password),
-    hasLowercase: /[a-z]/.test(password),
-    hasNumber: /\d/.test(password),
-  };
-
-  if (password.length === 0) {
-    return {
-      score: 0,
-      label: '',
-      checks,
-    };
-  }
-
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return {
-      score: 1,
-      label: 'Weak',
-      checks,
-    };
-  }
-
-  const metCount = [
-    checks.minLength,
-    checks.hasUppercase,
-    checks.hasLowercase,
-    checks.hasNumber,
-  ].filter(Boolean).length;
-
-  const score = Math.max(1, metCount) as 1 | 2 | 3 | 4;
-  const labels: Record<1 | 2 | 3 | 4, Exclude<PasswordStrengthLabel, ''>> = {
-    1: 'Weak',
-    2: 'Fair',
-    3: 'Good',
-    4: 'Strong',
-  };
-
-  return {
-    score,
-    label: labels[score],
-    checks,
   };
 }
 
@@ -378,4 +240,115 @@ export function getPasswordMatchStatus(
   }
 
   return {status: 'mismatch', message: 'Passwords do not match'};
+}
+
+export const NAME_ERROR = 'Please enter your full name (2–80 characters).';
+export const PHONE_ERROR =
+  'Please enter a valid phone number (7–20 digits) or leave it blank.';
+export const MESSAGE_ERROR =
+  'Please enter a message (at least 5 characters).';
+
+const PHONE_PATTERN = /^[0-9+\-()\s]{7,20}$/;
+
+export const contactSubmissionSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, {error: NAME_ERROR})
+    .max(80, {error: NAME_ERROR}),
+  email: emailSchema,
+  phoneNumber: z
+    .string()
+    .trim()
+    .refine((val) => val.length === 0 || PHONE_PATTERN.test(val), {
+      error: PHONE_ERROR,
+    }),
+  message: z
+    .string()
+    .trim()
+    .min(5, {error: MESSAGE_ERROR})
+    .max(2000, {error: MESSAGE_ERROR}),
+});
+
+export interface ContactSubmissionValidationResult {
+  nameError: string;
+  emailError: string;
+  phoneNumberError: string;
+  messageError: string;
+  isValid: boolean;
+}
+
+export function validateContactSubmission(input: {
+  name: string;
+  email: string;
+  phoneNumber: string;
+  message: string;
+}): ContactSubmissionValidationResult {
+  const parsed = contactSubmissionSchema.safeParse(input);
+  if (parsed.success) {
+    return {
+      nameError: '',
+      emailError: '',
+      phoneNumberError: '',
+      messageError: '',
+      isValid: true,
+    };
+  }
+
+  let nameError = '';
+  let emailError = '';
+  let phoneNumberError = '';
+  let messageError = '';
+
+  for (const issue of parsed.error.issues) {
+    const field = issue.path[0];
+    if (field === 'name' && !nameError) {
+      nameError = issue.message;
+    } else if (field === 'email' && !emailError) {
+      emailError = issue.message;
+    } else if (field === 'phoneNumber' && !phoneNumberError) {
+      phoneNumberError = issue.message;
+    } else if (field === 'message' && !messageError) {
+      messageError = issue.message;
+    }
+  }
+
+  return {
+    nameError,
+    emailError,
+    phoneNumberError,
+    messageError,
+    isValid: false,
+  };
+}
+
+export function mapSupabaseAuthError(error: unknown, fallback: string): string {
+  const rawMessage =
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof (error as {message?: unknown}).message === 'string'
+      ? (error as {message: string}).message
+      : '';
+
+  const lower = rawMessage.toLowerCase();
+  if (lower.includes('invalid login credentials')) {
+    return 'Invalid email or password. Please check your credentials and try again.';
+  }
+  if (lower.includes('email not confirmed')) {
+    return 'Please confirm your email address using the link sent to your inbox before signing in.';
+  }
+  if (lower.includes('already registered') || lower.includes('already exists')) {
+    return 'An account with this email address already exists.';
+  }
+  if (lower.includes('rate limit') || lower.includes('too many requests')) {
+    return 'Too many requests. Please wait a moment and try again.';
+  }
+  if (lower.includes('weak password') || lower.includes('at least')) {
+    return rawMessage;
+  }
+  if (rawMessage) {
+    return rawMessage;
+  }
+  return fallback;
 }

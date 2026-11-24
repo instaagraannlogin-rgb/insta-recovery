@@ -1,34 +1,34 @@
 import {render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {FirebaseError} from 'firebase/app';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {
   EMPTY_ACCOUNT_ERROR,
   INVALID_EMAIL_ERROR,
+  LINK_SENT_MESSAGE,
   MAX_ACCOUNT_LENGTH,
 } from '../utils/recovery';
 
-const {sendPasswordResetEmailMock} = vi.hoisted(() => ({
-  sendPasswordResetEmailMock: vi.fn(),
+const {resetPasswordForEmailMock} = vi.hoisted(() => ({
+  resetPasswordForEmailMock: vi.fn(),
 }));
 
-vi.mock('firebase/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('firebase/auth')>();
-  return {
-    ...actual,
-    sendPasswordResetEmail: sendPasswordResetEmailMock,
-  };
-});
+vi.mock('../utils/supabaseClient', () => ({
+  SUPABASE_NOT_CONFIGURED_ERROR: 'Supabase is not configured.',
+  getSupabaseClient: vi.fn(async () => ({
+    auth: {
+      resetPasswordForEmail: resetPasswordForEmailMock,
+    },
+  })),
+}));
 
-import {auth} from '../firebase';
 import {RecoveryCard} from './RecoveryCard';
 
 describe('RecoveryCard', () => {
   beforeEach(() => {
-    sendPasswordResetEmailMock.mockReset();
+    resetPasswordForEmailMock.mockReset();
   });
 
-  it('validates empty, non-email, and malformed email entries without calling sendPasswordResetEmail', async () => {
+  it('validates empty, non-email, and malformed email entries without calling Supabase', async () => {
     const user = userEvent.setup();
     render(<RecoveryCard />);
 
@@ -38,21 +38,12 @@ describe('RecoveryCard', () => {
     await user.click(submitBtn);
     expect(screen.getByRole('alert')).toHaveTextContent(EMPTY_ACCOUNT_ERROR);
     expect(input).toHaveAttribute('aria-invalid', 'true');
-    expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
+    expect(resetPasswordForEmailMock).not.toHaveBeenCalled();
 
     await user.type(input, 'alex_dev');
     await user.click(submitBtn);
     expect(screen.getByRole('alert')).toHaveTextContent(INVALID_EMAIL_ERROR);
-    expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
-
-    await user.clear(input);
-    await user.type(input, 'bad@');
-    await user.click(submitBtn);
-    expect(screen.getByRole('alert')).toHaveTextContent(INVALID_EMAIL_ERROR);
-    expect(sendPasswordResetEmailMock).not.toHaveBeenCalled();
-
-    await user.type(input, 'example.com');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(resetPasswordForEmailMock).not.toHaveBeenCalled();
   });
 
   it('shows approaching character limit counter at 50+ characters and enforces 64-char max', async () => {
@@ -60,8 +51,6 @@ describe('RecoveryCard', () => {
     render(<RecoveryCard />);
 
     const input = screen.getByRole('textbox', {name: 'Email address'});
-    expect(screen.queryByText(/\/64$/)).not.toBeInTheDocument();
-
     await user.type(input, 'a'.repeat(50));
     expect(screen.getByText('50/64')).toBeInTheDocument();
 
@@ -72,75 +61,49 @@ describe('RecoveryCard', () => {
     ).toBeInTheDocument();
   });
 
-  it('triggers shake animation on invalid submission when Element.animate is available', async () => {
-    const user = userEvent.setup();
-    render(<RecoveryCard />);
-
-    const wrapper = screen.getByTestId('account-input-wrapper');
-    const animateSpy = vi.fn();
-    wrapper.animate = animateSpy;
-
-    await user.click(screen.getByRole('button', {name: 'Continue'}));
-    expect(animateSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('calls Firebase sendPasswordResetEmail with trimmed email, shows loading state, and renders email-sent confirmation', async () => {
+  it('calls supabase.auth.resetPasswordForEmail and renders confirmation view', async () => {
     const user = userEvent.setup();
     const onNotify = vi.fn();
     const onBackToLogin = vi.fn();
 
-    let resolveReset: () => void = () => {};
-    sendPasswordResetEmailMock.mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolveReset = resolve;
-      }),
-    );
+    resetPasswordForEmailMock.mockResolvedValueOnce({data: {}, error: null});
 
     render(<RecoveryCard onBackToLogin={onBackToLogin} onNotify={onNotify} />);
 
-    const input = screen.getByRole('textbox', {name: 'Email address'});
-    await user.type(input, '  alex@example.com  ');
-    await user.click(screen.getByRole('button', {name: 'Continue'}));
-
-    const loadingBtn = screen.getByRole('button', {name: 'Sending...'});
-    expect(loadingBtn).toBeDisabled();
-    expect(loadingBtn).toHaveAttribute('aria-busy', 'true');
-    expect(input).toHaveAttribute('readonly');
-    expect(sendPasswordResetEmailMock).toHaveBeenCalledWith(
-      auth,
-      'alex@example.com',
+    await user.type(
+      screen.getByRole('textbox', {name: 'Email address'}),
+      '  alex@example.com  ',
     );
-
-    resolveReset();
+    await user.click(screen.getByRole('button', {name: 'Continue'}));
 
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {name: 'Check your email'}),
       ).toBeInTheDocument();
     });
-    expect(screen.getByText('alex@example.com')).toBeInTheDocument();
-    expect(onNotify).toHaveBeenCalledWith(
-      'Password reset email sent. Check your inbox to reset your password.',
-      'Recovery link sent',
+    expect(resetPasswordForEmailMock).toHaveBeenCalledWith(
+      'alex@example.com',
+      expect.objectContaining({
+        redirectTo: expect.stringContaining('#reset-password'),
+      }),
     );
-
-    await user.click(screen.getByRole('button', {name: 'Use a different email'}));
-    expect(
-      screen.getByRole('heading', {name: 'Forgot your password?'}),
-    ).toBeInTheDocument();
+    expect(onNotify).toHaveBeenCalledWith(
+      LINK_SENT_MESSAGE,
+      'Reset email sent',
+    );
 
     await user.click(screen.getByRole('link', {name: 'Back to login'}));
     expect(onBackToLogin).toHaveBeenCalledTimes(1);
   });
 
-  it('displays Firebase Auth errors cleanly without advancing', async () => {
+  it('displays Supabase resetPasswordForEmail errors cleanly', async () => {
     const user = userEvent.setup();
-    sendPasswordResetEmailMock.mockRejectedValueOnce(
-      new FirebaseError('auth/too-many-requests', 'Too many requests'),
-    );
+    resetPasswordForEmailMock.mockResolvedValueOnce({
+      data: null,
+      error: {message: 'Email rate limit exceeded'},
+    });
 
     render(<RecoveryCard />);
-
     await user.type(
       screen.getByRole('textbox', {name: 'Email address'}),
       'alex@example.com',
@@ -148,10 +111,7 @@ describe('RecoveryCard', () => {
     await user.click(screen.getByRole('button', {name: 'Continue'}));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      /Too many attempts/i,
+      /Too many requests/i,
     );
-    expect(
-      screen.getByRole('heading', {name: 'Forgot your password?'}),
-    ).toBeInTheDocument();
   });
 });

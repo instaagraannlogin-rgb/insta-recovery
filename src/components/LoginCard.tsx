@@ -1,55 +1,41 @@
-import {FormEvent, useEffect, useRef, useState} from 'react';
-import {
-  User as FirebaseUser,
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
-} from 'firebase/auth';
-import {Eye, EyeOff, Loader2, Lock, User} from 'lucide-react';
-import {auth} from '../firebase';
-import {
-  mapFirebaseAuthError,
-  requireEmailForFirebaseAuth,
-} from '../utils/firebaseAuth';
+import {FormEvent, useRef, useState} from 'react';
+import {CheckCircle2, Eye, EyeOff, Loader2, Lock, User} from 'lucide-react';
 import {
   MAX_ACCOUNT_LENGTH,
   getAccountCharacterStatus,
+  mapSupabaseAuthError,
   validateLoginInput,
 } from '../utils/recovery';
-import {PasswordReset} from './PasswordReset';
+import {
+  SUPABASE_NOT_CONFIGURED_ERROR,
+  getSupabaseClient,
+} from '../utils/supabaseClient';
 
 interface LoginCardProps {
+  initialMode?: 'login' | 'signup';
   onForgotPassword: () => void;
+  onAuthSuccess?: () => void;
   onNotify?: (message: string, title?: string) => void;
 }
 
-export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(
-    () => auth.currentUser,
-  );
-  const [showChangePassword, setShowChangePassword] = useState(false);
-  const [account, setAccount] = useState('');
+export function LoginCard({
+  initialMode = 'login',
+  onForgotPassword,
+  onAuthSuccess,
+  onNotify,
+}: LoginCardProps) {
+  const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [accountError, setAccountError] = useState('');
+  const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [authError, setAuthError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formWrapperRef = useRef<HTMLDivElement | null>(null);
 
-  const charStatus = getAccountCharacterStatus(account);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-      if (!user) {
-        setShowChangePassword(false);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
+  const charStatus = getAccountCharacterStatus(email);
 
   const triggerShake = () => {
     if (
@@ -82,120 +68,83 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
       return;
     }
 
-    const validation = validateLoginInput(account, password);
-    const emailError = validation.accountError || requireEmailForFirebaseAuth(account);
-    setAccountError(emailError);
+    const validation = validateLoginInput(email, password);
+    setEmailError(validation.emailError);
     setPasswordError(validation.passwordError);
     setAuthError('');
+    setSuccessMessage('');
 
-    if (emailError || !validation.isValid) {
+    if (!validation.isValid) {
       triggerShake();
       return;
     }
 
-    const trimmedEmail = account.trim();
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      setAuthError(SUPABASE_NOT_CONFIGURED_ERROR);
+      return;
+    }
+
+    const trimmedEmail = email.trim();
     setIsSubmitting(true);
 
     try {
       if (mode === 'signup') {
-        await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-        onNotify?.(`Account created for ${trimmedEmail}.`, 'Account created');
+        const {data, error} = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password,
+          options: {
+            emailRedirectTo:
+              typeof window !== 'undefined' ? window.location.origin : undefined,
+          },
+        });
+
+        if (error) {
+          setAuthError(
+            mapSupabaseAuthError(error, 'Unable to create your account.'),
+          );
+          triggerShake();
+          return;
+        }
+
+        setPassword('');
+
+        if (data.session) {
+          onNotify?.(
+            `Account created and signed in as ${trimmedEmail}.`,
+            'Welcome',
+          );
+          onAuthSuccess?.();
+        } else {
+          const msg = `Account created for ${trimmedEmail}. Please check your inbox and confirm your email address before signing in.`;
+          setSuccessMessage(msg);
+          setMode('login');
+          onNotify?.(msg, 'Confirm your email');
+        }
       } else {
-        await signInWithEmailAndPassword(auth, trimmedEmail, password);
-        onNotify?.(`Signed in as ${trimmedEmail}.`, 'Signed in');
+        const {error} = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password,
+        });
+
+        if (error) {
+          setAuthError(
+            mapSupabaseAuthError(error, 'Unable to sign in. Please try again.'),
+          );
+          triggerShake();
+          return;
+        }
+
+        setPassword('');
+        onNotify?.(`Signed in as ${trimmedEmail}.`, 'Welcome back');
+        onAuthSuccess?.();
       }
-      setPassword('');
-    } catch (error) {
-      setAuthError(mapFirebaseAuthError(error));
-      triggerShake();
+    } catch {
+      setAuthError('Network error while connecting to Supabase.');
     } finally {
       setIsSubmitting(false);
     }
   };
-
-  const handleSignOut = async () => {
-    setIsSubmitting(true);
-    try {
-      await signOut(auth);
-      setShowChangePassword(false);
-      setAccount('');
-      setPassword('');
-      setAuthError('');
-      onNotify?.('You have been signed out.', 'Signed out');
-    } catch (error) {
-      setAuthError(mapFirebaseAuthError(error));
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (currentUser) {
-    return (
-      <main className="min-h-[80vh] flex justify-center items-start py-[60px] px-[20px] max-[480px]:py-[45px]">
-        <div className="w-full max-w-[390px] max-[480px]:max-w-[350px] text-center">
-          <div
-            className="w-[85px] h-[85px] border-2 border-[#262626] rounded-full mx-auto mb-[25px] flex justify-center items-center text-[#262626]"
-            aria-hidden="true"
-          >
-            <User className="w-9 h-9 stroke-[1.75]" />
-          </div>
-
-          {showChangePassword ? (
-            <PasswordReset
-              account={currentUser.email || ''}
-              onBackToLogin={() => setShowChangePassword(false)}
-              onUseDifferentAccount={handleSignOut}
-              onResetSuccess={() => {
-                setShowChangePassword(false);
-                onNotify?.(
-                  'Your password has been updated.',
-                  'Password updated',
-                );
-              }}
-            />
-          ) : (
-            <>
-              <h2 className="text-[22px] font-bold mb-[15px]">Signed in</h2>
-
-              <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-                You are signed in as{' '}
-                <span className="font-semibold text-[#262626]">
-                  {currentUser.email}
-                </span>
-                .
-              </p>
-
-              {authError && (
-                <p
-                  role="alert"
-                  className="text-[#ed4956] text-[13px] text-left mb-[15px]"
-                >
-                  {authError}
-                </p>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setShowChangePassword(true)}
-                className="w-full p-[13px] mb-[12px] bg-[#0095f6] hover:bg-[#1877f2] text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer transition-colors"
-              >
-                Change password
-              </button>
-
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={handleSignOut}
-                className="w-full p-[13px] bg-white hover:bg-[#fafafa] text-[#262626] border border-[#dbdbdb] rounded-[5px] text-[14px] font-bold cursor-pointer transition-colors disabled:opacity-60"
-              >
-                {isSubmitting ? 'Signing out...' : 'Sign out'}
-              </button>
-            </>
-          )}
-        </div>
-      </main>
-    );
-  }
 
   return (
     <main className="min-h-[80vh] flex justify-center items-start py-[60px] px-[20px] max-[480px]:py-[45px]">
@@ -208,51 +157,59 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
         </div>
 
         <h2 className="text-[22px] font-bold mb-[15px]">
-          {mode === 'signin' ? 'Sign in' : 'Create account'}
+          {mode === 'login' ? 'Sign in' : 'Create account'}
         </h2>
 
         <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
-          {mode === 'signin'
-            ? 'Enter your email and password to access your account.'
-            : 'Enter your email and choose a password to create your account.'}
+          {mode === 'login'
+            ? 'Enter your email and password to access your dashboard.'
+            : 'Create an account with your email and password.'}
         </p>
+
+        {successMessage && (
+          <div
+            role="status"
+            className="flex items-start gap-2 text-left text-[13px] text-[#16803c] bg-[#f0fdf4] border border-[#bbf7d0] rounded-[5px] p-3 mb-[16px]"
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+            <span>{successMessage}</span>
+          </div>
+        )}
 
         <div ref={formWrapperRef}>
           <form id="loginForm" onSubmit={handleSubmit} noValidate>
             <div
               className={`relative ${
-                accountError || charStatus.showCounter ? 'mb-[8px]' : 'mb-[12px]'
+                emailError || charStatus.showCounter ? 'mb-[8px]' : 'mb-[12px]'
               }`}
             >
               <input
                 type="email"
-                id="login-account"
+                id="login-email"
                 autoComplete="email"
                 aria-label="Email address"
-                aria-invalid={Boolean(accountError)}
-                aria-describedby={
-                  accountError ? 'login-account-error' : undefined
-                }
+                aria-invalid={Boolean(emailError)}
+                aria-describedby={emailError ? 'login-email-error' : undefined}
                 placeholder="Email address"
                 maxLength={MAX_ACCOUNT_LENGTH}
                 readOnly={isSubmitting}
-                value={account}
+                value={email}
                 onChange={(e) => {
                   if (isSubmitting) return;
-                  setAccount(e.target.value.slice(0, MAX_ACCOUNT_LENGTH));
-                  if (accountError) setAccountError('');
+                  setEmail(e.target.value.slice(0, MAX_ACCOUNT_LENGTH));
+                  if (emailError) setEmailError('');
                   if (authError) setAuthError('');
                 }}
                 required
                 className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
-                  accountError
+                  emailError
                     ? 'border-[#ed4956] focus:border-[#ed4956]'
                     : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
                 }`}
               />
               <User
                 className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
-                  accountError
+                  emailError
                     ? 'text-[#ed4956]'
                     : 'text-[#737373] peer-focus:text-[#262626]'
                 }`}
@@ -260,15 +217,15 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
               />
             </div>
 
-            {(accountError || charStatus.showCounter) && (
+            {(emailError || charStatus.showCounter) && (
               <div className="flex items-start justify-between gap-2 mb-[12px]">
-                {accountError ? (
+                {emailError ? (
                   <p
-                    id="login-account-error"
+                    id="login-email-error"
                     role="alert"
                     className="text-[#ed4956] text-[13px] text-left"
                   >
-                    {accountError}
+                    {emailError}
                   </p>
                 ) : (
                   <span />
@@ -296,7 +253,7 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
                 type={showPassword ? 'text' : 'password'}
                 id="login-password"
                 autoComplete={
-                  mode === 'signin' ? 'current-password' : 'new-password'
+                  mode === 'login' ? 'current-password' : 'new-password'
                 }
                 aria-label="Password"
                 aria-invalid={Boolean(passwordError)}
@@ -374,13 +331,13 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
                     aria-hidden="true"
                   />
                   <span>
-                    {mode === 'signin' ? 'Signing in...' : 'Creating account...'}
+                    {mode === 'login' ? 'Signing in...' : 'Creating account...'}
                   </span>
                 </>
-              ) : mode === 'signin' ? (
+              ) : mode === 'login' ? (
                 'Log In'
               ) : (
-                'Create Account'
+                'Sign Up'
               )}
             </button>
           </form>
@@ -389,7 +346,7 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
         <button
           type="button"
           onClick={onForgotPassword}
-          className="inline-block mt-[30px] text-[#262626] bg-transparent border-0 text-[14px] font-bold cursor-pointer hover:underline"
+          className="inline-block mt-[25px] text-[#262626] bg-transparent border-0 text-[14px] font-bold cursor-pointer hover:underline"
         >
           Forgot password?
         </button>
@@ -398,16 +355,17 @@ export function LoginCard({onForgotPassword, onNotify}: LoginCardProps) {
           <button
             type="button"
             onClick={() => {
-              setMode((prev) => (prev === 'signin' ? 'signup' : 'signin'));
-              setAccountError('');
+              setMode((prev) => (prev === 'login' ? 'signup' : 'login'));
+              setEmailError('');
               setPasswordError('');
               setAuthError('');
+              setSuccessMessage('');
             }}
             className="text-[#0095f6] hover:text-[#1877f2] bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
           >
-            {mode === 'signin'
-              ? 'Need an account? Create one'
-              : 'Already have an account? Sign in'}
+            {mode === 'login'
+              ? "Don't have an account? Sign up"
+              : 'Already have an account? Log in'}
           </button>
         </div>
       </div>

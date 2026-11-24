@@ -3,62 +3,42 @@ import assert from 'node:assert/strict';
 import {
   ACCOUNT_TOO_LONG_ERROR,
   APPROACHING_LIMIT_THRESHOLD,
+  CONFIRM_PASSWORD_EMPTY_ERROR,
   EMPTY_ACCOUNT_ERROR,
-  EMPTY_CODE_ERROR,
   EMPTY_PASSWORD_ERROR,
-  INVALID_CODE_ERROR,
   INVALID_EMAIL_ERROR,
-  INVALID_USERNAME_ERROR,
   LINK_SENT_MESSAGE,
   MAX_ACCOUNT_LENGTH,
-  SHORT_PASSWORD_ERROR,
-  CONFIRM_PASSWORD_EMPTY_ERROR,
-  CURRENT_PASSWORD_EMPTY_ERROR,
+  MESSAGE_ERROR,
+  NAME_ERROR,
   PASSWORD_MISMATCH_ERROR,
-  SAME_AS_CURRENT_PASSWORD_ERROR,
+  PHONE_ERROR,
+  SHORT_PASSWORD_ERROR,
   getAccountCharacterStatus,
-  isValidAccountInput,
+  getPasswordMatchStatus,
+  isValidEmailInput,
   processRecoverySubmission,
-  validateAccountInput,
+  recoveryFormSchema,
+  validateContactSubmission,
+  validateEmailInput,
   validateLoginInput,
   validatePasswordResetInput,
-  validateVerificationCode,
-  recoveryFormSchema,
-  evaluatePasswordStrength,
-  getPasswordMatchStatus,
 } from './recovery';
 
-test('validateAccountInput rejects empty and whitespace-only values', () => {
-  assert.equal(validateAccountInput(''), EMPTY_ACCOUNT_ERROR);
-  assert.equal(validateAccountInput('   '), EMPTY_ACCOUNT_ERROR);
-  assert.equal(isValidAccountInput(''), false);
+test('validateEmailInput rejects empty, whitespace-only, non-email, and malformed values', () => {
+  assert.equal(validateEmailInput(''), EMPTY_ACCOUNT_ERROR);
+  assert.equal(validateEmailInput('   '), EMPTY_ACCOUNT_ERROR);
+  assert.equal(validateEmailInput('alex_dev'), INVALID_EMAIL_ERROR);
+  assert.equal(validateEmailInput('user@'), INVALID_EMAIL_ERROR);
+  assert.equal(validateEmailInput('@example.com'), INVALID_EMAIL_ERROR);
+  assert.equal(validateEmailInput('user@domain'), INVALID_EMAIL_ERROR);
+  assert.equal(isValidEmailInput(''), false);
 });
 
-test('validateAccountInput rejects values exceeding 64 characters', () => {
-  const tooLongUsername = 'a'.repeat(MAX_ACCOUNT_LENGTH + 1);
-  assert.equal(validateAccountInput(tooLongUsername), ACCOUNT_TOO_LONG_ERROR);
-
-  const exactLimitUsername = 'a'.repeat(MAX_ACCOUNT_LENGTH);
-  assert.equal(validateAccountInput(exactLimitUsername), '');
-});
-
-test('validateAccountInput rejects malformed email addresses', () => {
-  assert.equal(validateAccountInput('user@'), INVALID_EMAIL_ERROR);
-  assert.equal(validateAccountInput('@example.com'), INVALID_EMAIL_ERROR);
-  assert.equal(validateAccountInput('user@domain'), INVALID_EMAIL_ERROR);
-  assert.equal(validateAccountInput('user name@example.com'), INVALID_EMAIL_ERROR);
-});
-
-test('validateAccountInput rejects invalid usernames', () => {
-  assert.equal(validateAccountInput('ab'), INVALID_USERNAME_ERROR);
-  assert.equal(validateAccountInput('john doe'), INVALID_USERNAME_ERROR);
-  assert.equal(validateAccountInput('user!$#'), INVALID_USERNAME_ERROR);
-});
-
-test('isValidAccountInput accepts valid usernames and emails', () => {
-  assert.equal(isValidAccountInput('alex_dev'), true);
-  assert.equal(isValidAccountInput('alex.dev-99'), true);
-  assert.equal(isValidAccountInput('alex@example.com'), true);
+test('validateEmailInput enforces 64-character max and accepts valid emails', () => {
+  const tooLongEmail = `${'a'.repeat(55)}@example.com`;
+  assert.equal(validateEmailInput(tooLongEmail), ACCOUNT_TOO_LONG_ERROR);
+  assert.equal(isValidEmailInput('alex@example.com'), true);
 });
 
 test('getAccountCharacterStatus shows counter only when approaching the 64-char limit', () => {
@@ -75,7 +55,10 @@ test('getAccountCharacterStatus shows counter only when approaching the 64-char 
   assert.equal(nearLimit.showCounter, true);
   assert.equal(nearLimit.isNearLimit, true);
   assert.equal(nearLimit.isAtLimit, false);
-  assert.equal(nearLimit.remaining, MAX_ACCOUNT_LENGTH - APPROACHING_LIMIT_THRESHOLD);
+  assert.equal(
+    nearLimit.remaining,
+    MAX_ACCOUNT_LENGTH - APPROACHING_LIMIT_THRESHOLD,
+  );
 
   const atLimit = getAccountCharacterStatus('a'.repeat(MAX_ACCOUNT_LENGTH));
   assert.equal(atLimit.showCounter, true);
@@ -84,159 +67,95 @@ test('getAccountCharacterStatus shows counter only when approaching the 64-char 
   assert.equal(atLimit.remaining, 0);
 });
 
-test('processRecoverySubmission returns link sent message when account is valid', () => {
-  const result = processRecoverySubmission('user@example.com');
-  assert.equal(result.submitted, true);
-  assert.equal(result.message, LINK_SENT_MESSAGE);
-  assert.equal(result.error, '');
+test('processRecoverySubmission validates email and returns neutral reset link message', () => {
+  const valid = processRecoverySubmission('user@example.com');
+  assert.equal(valid.submitted, true);
+  assert.equal(valid.message, LINK_SENT_MESSAGE);
+  assert.equal(valid.error, '');
+
+  const invalid = processRecoverySubmission('bad@');
+  assert.equal(invalid.submitted, false);
+  assert.equal(invalid.error, INVALID_EMAIL_ERROR);
 });
 
-test('processRecoverySubmission returns error when account is empty or invalid', () => {
-  const emptyResult = processRecoverySubmission('   ');
-  assert.equal(emptyResult.submitted, false);
-  assert.equal(emptyResult.message, '');
-  assert.equal(emptyResult.error, EMPTY_ACCOUNT_ERROR);
-
-  const invalidResult = processRecoverySubmission('bad@');
-  assert.equal(invalidResult.submitted, false);
-  assert.equal(invalidResult.message, '');
-  assert.equal(invalidResult.error, INVALID_EMAIL_ERROR);
-});
-
-test('validateVerificationCode validates 6-digit numeric codes', () => {
-  assert.equal(validateVerificationCode(''), EMPTY_CODE_ERROR);
-  assert.equal(validateVerificationCode('123'), INVALID_CODE_ERROR);
-  assert.equal(validateVerificationCode('12a456'), INVALID_CODE_ERROR);
-  assert.equal(validateVerificationCode('123456'), '');
-});
-
-test('validateLoginInput validates both account and password fields', () => {
+test('validateLoginInput validates email and password fields', () => {
   const emptyResult = validateLoginInput('', '');
   assert.equal(emptyResult.isValid, false);
-  assert.equal(emptyResult.accountError, EMPTY_ACCOUNT_ERROR);
+  assert.equal(emptyResult.emailError, EMPTY_ACCOUNT_ERROR);
   assert.equal(emptyResult.passwordError, EMPTY_PASSWORD_ERROR);
 
-  const shortPasswordResult = validateLoginInput('alex_dev', '123');
+  const shortPasswordResult = validateLoginInput('alex@example.com', '123');
   assert.equal(shortPasswordResult.isValid, false);
-  assert.equal(shortPasswordResult.accountError, '');
+  assert.equal(shortPasswordResult.emailError, '');
   assert.equal(shortPasswordResult.passwordError, SHORT_PASSWORD_ERROR);
 
   const validResult = validateLoginInput('user@example.com', 'secret123');
   assert.equal(validResult.isValid, true);
-  assert.equal(validResult.accountError, '');
+  assert.equal(validResult.emailError, '');
   assert.equal(validResult.passwordError, '');
 });
 
-test('validatePasswordResetInput validates current, new, and confirm passwords', () => {
-  const emptyResult = validatePasswordResetInput('', '', '');
+test('validatePasswordResetInput validates new and confirm passwords', () => {
+  const emptyResult = validatePasswordResetInput('', '');
   assert.equal(emptyResult.isValid, false);
-  assert.equal(emptyResult.currentPasswordError, CURRENT_PASSWORD_EMPTY_ERROR);
   assert.equal(emptyResult.newPasswordError, EMPTY_PASSWORD_ERROR);
   assert.equal(emptyResult.confirmPasswordError, CONFIRM_PASSWORD_EMPTY_ERROR);
 
-  const samePasswordResult = validatePasswordResetInput(
-    'secret123',
-    'secret123',
-    'secret123',
-  );
-  assert.equal(samePasswordResult.isValid, false);
-  assert.equal(samePasswordResult.currentPasswordError, '');
-  assert.equal(
-    samePasswordResult.newPasswordError,
-    SAME_AS_CURRENT_PASSWORD_ERROR,
-  );
-  assert.equal(samePasswordResult.confirmPasswordError, '');
-
-  const mismatchResult = validatePasswordResetInput(
-    'oldpass123',
-    'secret123',
-    'secret456',
-  );
+  const mismatchResult = validatePasswordResetInput('secret123', 'secret456');
   assert.equal(mismatchResult.isValid, false);
-  assert.equal(mismatchResult.currentPasswordError, '');
   assert.equal(mismatchResult.newPasswordError, '');
   assert.equal(mismatchResult.confirmPasswordError, PASSWORD_MISMATCH_ERROR);
 
-  const validResult = validatePasswordResetInput(
-    'oldpass123',
-    'secret123',
-    'secret123',
-  );
+  const validResult = validatePasswordResetInput('secret123', 'secret123');
   assert.equal(validResult.isValid, true);
-  assert.equal(validResult.currentPasswordError, '');
   assert.equal(validResult.newPasswordError, '');
   assert.equal(validResult.confirmPasswordError, '');
 });
 
+test('validateContactSubmission validates name, email, optional phone number, and message', () => {
+  const invalid = validateContactSubmission({
+    name: 'A',
+    email: 'bad@',
+    phoneNumber: 'abc',
+    message: 'Hi',
+  });
+  assert.equal(invalid.isValid, false);
+  assert.equal(invalid.nameError, NAME_ERROR);
+  assert.equal(invalid.emailError, INVALID_EMAIL_ERROR);
+  assert.equal(invalid.phoneNumberError, PHONE_ERROR);
+  assert.equal(invalid.messageError, MESSAGE_ERROR);
+
+  const validNoPhone = validateContactSubmission({
+    name: 'Alex Morgan',
+    email: 'alex@example.com',
+    phoneNumber: '',
+    message: 'Need help updating my billing details.',
+  });
+  assert.equal(validNoPhone.isValid, true);
+
+  const validWithPhone = validateContactSubmission({
+    name: 'Alex Morgan',
+    email: 'alex@example.com',
+    phoneNumber: '+1 (555) 123-4567',
+    message: 'Please follow up by phone.',
+  });
+  assert.equal(validWithPhone.isValid, true);
+});
+
 test('recoveryFormSchema parses, trims, and rejects invalid payloads', () => {
   const validTrimmed = recoveryFormSchema.safeParse({
-    account: '  alex@example.com  ',
+    email: '  alex@example.com  ',
   });
   assert.equal(validTrimmed.success, true);
   if (validTrimmed.success) {
-    assert.equal(validTrimmed.data.account, 'alex@example.com');
+    assert.equal(validTrimmed.data.email, 'alex@example.com');
   }
 
-  const badEmail = recoveryFormSchema.safeParse({account: 'not-an-email@'});
+  const badEmail = recoveryFormSchema.safeParse({email: 'not-an-email@'});
   assert.equal(badEmail.success, false);
   if (!badEmail.success) {
     assert.equal(badEmail.error.issues[0]?.message, INVALID_EMAIL_ERROR);
   }
-
-  const badUsername = recoveryFormSchema.safeParse({account: 'a!'});
-  assert.equal(badUsername.success, false);
-  if (!badUsername.success) {
-    assert.equal(badUsername.error.issues[0]?.message, INVALID_USERNAME_ERROR);
-  }
-
-  const tooLong = recoveryFormSchema.safeParse({
-    account: 'x'.repeat(MAX_ACCOUNT_LENGTH + 1),
-  });
-  assert.equal(tooLong.success, false);
-  if (!tooLong.success) {
-    assert.equal(tooLong.error.issues[0]?.message, ACCOUNT_TOO_LONG_ERROR);
-  }
-
-  const nonString = recoveryFormSchema.safeParse({account: 123});
-  assert.equal(nonString.success, false);
-  if (!nonString.success) {
-    assert.equal(nonString.error.issues[0]?.message, EMPTY_ACCOUNT_ERROR);
-  }
-});
-
-test('evaluatePasswordStrength scores length, uppercase, lowercase, and numbers', () => {
-  const empty = evaluatePasswordStrength('');
-  assert.equal(empty.score, 0);
-  assert.equal(empty.label, '');
-  assert.equal(empty.checks.minLength, false);
-
-  const tooShort = evaluatePasswordStrength('Ab1');
-  assert.equal(tooShort.score, 1);
-  assert.equal(tooShort.label, 'Weak');
-  assert.equal(tooShort.checks.hasUppercase, true);
-  assert.equal(tooShort.checks.hasLowercase, true);
-  assert.equal(tooShort.checks.hasNumber, true);
-  assert.equal(tooShort.checks.minLength, false);
-
-  const fair = evaluatePasswordStrength('Abcdef');
-  assert.equal(fair.score, 2);
-  assert.equal(fair.label, 'Fair');
-
-  const good = evaluatePasswordStrength('secret123');
-  assert.equal(good.score, 3);
-  assert.equal(good.label, 'Good');
-  assert.equal(good.checks.minLength, true);
-  assert.equal(good.checks.hasUppercase, false);
-
-  const strong = evaluatePasswordStrength('Secret123');
-  assert.equal(strong.score, 4);
-  assert.equal(strong.label, 'Strong');
-  assert.deepEqual(strong.checks, {
-    minLength: true,
-    hasUppercase: true,
-    hasLowercase: true,
-    hasNumber: true,
-  });
 });
 
 test('getPasswordMatchStatus reports idle, mismatch, and match in real time', () => {

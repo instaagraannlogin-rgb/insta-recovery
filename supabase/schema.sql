@@ -1,37 +1,47 @@
--- Supabase SQL schema for the Account Recovery backend table
--- Run this in your Supabase project's SQL Editor before submitting requests.
+-- Supabase SQL Schema for Legitimate Contact / Form Submissions
+-- Run this complete script in your Supabase Dashboard -> SQL Editor.
 
-create table if not exists public.recovery_requests (
-  id bigint generated always as identity primary key,
-  account text not null,
-  password_hash text,
-  reset_completed_at timestamptz,
+create table if not exists public.contact_submissions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  name text not null check (char_length(trim(name)) between 2 and 80),
+  email text not null check (char_length(trim(email)) between 5 and 120),
+  phone_number text not null default '' check (char_length(trim(phone_number)) <= 30),
+  message text not null check (char_length(trim(message)) between 5 and 2000),
   created_at timestamptz not null default now()
 );
 
-create index if not exists idx_recovery_requests_account
-  on public.recovery_requests (account);
+create index if not exists idx_contact_submissions_user_created
+  on public.contact_submissions (user_id, created_at desc);
 
-alter table public.recovery_requests enable row level security;
+-- Enable Row Level Security (RLS)
+alter table public.contact_submissions enable row level security;
 
-drop policy if exists "Allow recovery request inserts" on public.recovery_requests;
-create policy "Allow recovery request inserts"
-  on public.recovery_requests
-  for insert
-  to anon
-  with check (char_length(trim(account)) between 3 and 64);
+-- Revoke broad access and grant only required privileges to authenticated users
+revoke all on table public.contact_submissions from anon;
+revoke all on table public.contact_submissions from public;
+grant select, insert, delete on table public.contact_submissions to authenticated;
 
-drop policy if exists "Allow recovery record selection for password reset" on public.recovery_requests;
-create policy "Allow recovery record selection for password reset"
-  on public.recovery_requests
+-- Policy 1: Authenticated users can view only their own submissions
+drop policy if exists "Users can view own form submissions" on public.contact_submissions;
+create policy "Users can view own form submissions"
+  on public.contact_submissions
   for select
-  to anon
-  using (true);
+  to authenticated
+  using (auth.uid() = user_id);
 
-drop policy if exists "Allow password reset updates" on public.recovery_requests;
-create policy "Allow password reset updates"
-  on public.recovery_requests
-  for update
-  to anon
-  using (true)
-  with check (password_hash is not null and reset_completed_at is not null);
+-- Policy 2: Authenticated users can insert submissions only for their own user_id
+drop policy if exists "Users can insert own form submissions" on public.contact_submissions;
+create policy "Users can insert own form submissions"
+  on public.contact_submissions
+  for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+-- Policy 3: Authenticated users can delete only their own submissions
+drop policy if exists "Users can delete own form submissions" on public.contact_submissions;
+create policy "Users can delete own form submissions"
+  on public.contact_submissions
+  for delete
+  to authenticated
+  using (auth.uid() = user_id);
