@@ -50,6 +50,15 @@ test('resolvePublicSupabaseConfig normalizes HTTPS URLs and never reads service 
       publishableKey: 'sb_publishable_test',
     });
 
+    process.env.SUPABASE_URL = 'https://preferred-proj.supabase.co/';
+    process.env.SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_preferred';
+    assert.deepEqual(resolvePublicSupabaseConfig(), {
+      url: 'https://preferred-proj.supabase.co',
+      publishableKey: 'sb_publishable_preferred',
+    });
+
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_PUBLISHABLE_KEY;
     process.env.VITE_SUPABASE_URL = 'http://insecure.example.com';
     assert.equal(resolvePublicSupabaseConfig(), null);
   } finally {

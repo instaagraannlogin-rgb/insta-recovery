@@ -13,7 +13,7 @@ alter table public.profiles enable row level security;
 
 revoke all on table public.profiles from anon;
 revoke all on table public.profiles from public;
-grant select, update on table public.profiles to authenticated;
+grant select, insert, update on table public.profiles to authenticated;
 
 drop policy if exists "Users can view own profile" on public.profiles;
 create policy "Users can view own profile"
@@ -21,6 +21,13 @@ create policy "Users can view own profile"
   for select
   to authenticated
   using (auth.uid() = id);
+
+drop policy if exists "Users can insert own profile" on public.profiles;
+create policy "Users can insert own profile"
+  on public.profiles
+  for insert
+  to authenticated
+  with check (auth.uid() = id);
 
 drop policy if exists "Users can update own profile" on public.profiles;
 create policy "Users can update own profile"

@@ -24,12 +24,13 @@ describe('recordRecoveryEvent', () => {
   it('inserts trimmed email, event_type, and user_id into recovery_events', async () => {
     insertMock.mockResolvedValueOnce({error: null});
 
-    await recordRecoveryEvent({
+    const result = await recordRecoveryEvent({
       email: '  user@example.com  ',
       eventType: 'recovery_requested',
       userId: 'user-123',
     });
 
+    expect(result).toEqual({ok: true});
     expect(fromMock).toHaveBeenCalledWith('recovery_events');
     expect(insertMock).toHaveBeenCalledWith([
       {
@@ -40,19 +41,26 @@ describe('recordRecoveryEvent', () => {
     ]);
   });
 
-  it('ignores blank emails and safely swallows database errors', async () => {
-    await recordRecoveryEvent({
+  it('ignores blank emails and reports database errors without throwing', async () => {
+    const blankResult = await recordRecoveryEvent({
       email: '   ',
       eventType: 'otp_verified',
     });
+    expect(blankResult).toEqual({ok: false, error: 'Missing email'});
     expect(fromMock).not.toHaveBeenCalled();
 
+    insertMock.mockResolvedValueOnce({error: {message: 'permission denied'}});
+    const dbErrResult = await recordRecoveryEvent({
+      email: 'user@example.com',
+      eventType: 'password_changed',
+    });
+    expect(dbErrResult).toEqual({ok: false, error: 'permission denied'});
+
     insertMock.mockRejectedValueOnce(new Error('relation does not exist'));
-    await expect(
-      recordRecoveryEvent({
-        email: 'user@example.com',
-        eventType: 'password_changed',
-      }),
-    ).resolves.toBeUndefined();
+    const throwResult = await recordRecoveryEvent({
+      email: 'user@example.com',
+      eventType: 'password_changed',
+    });
+    expect(throwResult).toEqual({ok: false, error: 'relation does not exist'});
   });
 });

@@ -5,58 +5,98 @@ export type RecoveryEventType =
   | 'otp_verified'
   | 'password_changed';
 
+export interface SupabaseWriteResult {
+  ok: boolean;
+  error?: string;
+}
+
 export async function recordRecoveryEvent(input: {
   email: string;
   eventType: RecoveryEventType;
   userId?: string | null;
-}): Promise<void> {
+}): Promise<SupabaseWriteResult> {
   const trimmedEmail = input.email.trim();
   if (!trimmedEmail) {
-    return;
+    return {ok: false, error: 'Missing email'};
   }
 
   try {
     const supabase = await getSupabaseClient();
     if (!supabase || typeof supabase.from !== 'function') {
-      return;
+      return {ok: false, error: 'Supabase client is not configured'};
     }
 
-    await supabase.from('recovery_events').insert([
+    const {error} = await supabase.from('recovery_events').insert([
       {
         user_id: input.userId ?? null,
         email: trimmedEmail,
         event_type: input.eventType,
       },
     ]);
-  } catch {
-    // Never interrupt recovery flow if optional audit table has not been created yet
+
+    if (error) {
+      return {ok: false, error: error.message};
+    }
+
+    return {ok: true};
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
   }
 }
 
 export async function syncUserProfile(input: {
   userId: string;
   email: string;
-}): Promise<void> {
+}): Promise<SupabaseWriteResult> {
   const trimmedEmail = input.email.trim();
   if (!input.userId || !trimmedEmail) {
-    return;
+    return {ok: false, error: 'Missing userId or email'};
   }
 
   try {
     const supabase = await getSupabaseClient();
     if (!supabase || typeof supabase.from !== 'function') {
-      return;
+      return {ok: false, error: 'Supabase client is not configured'};
     }
 
-    await supabase.from('profiles').upsert(
+    const now = new Date().toISOString();
+    const {data: updatedRows, error: updateError} = await supabase
+      .from('profiles')
+      .update({
+        email: trimmedEmail,
+        updated_at: now,
+      })
+      .eq('id', input.userId)
+      .select('id');
+
+    if (updateError) {
+      return {ok: false, error: updateError.message};
+    }
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      return {ok: true};
+    }
+
+    const {error: insertError} = await supabase.from('profiles').insert([
       {
         id: input.userId,
         email: trimmedEmail,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       },
-      {onConflict: 'id'},
-    );
-  } catch {
-    // Non-blocking profile sync
+    ]);
+
+    if (insertError) {
+      return {ok: false, error: insertError.message};
+    }
+
+    return {ok: true};
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
   }
 }

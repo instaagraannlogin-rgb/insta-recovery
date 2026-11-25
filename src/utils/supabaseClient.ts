@@ -39,9 +39,8 @@ export function getSyncSupabaseClient(): SupabaseClient | null {
 }
 
 export async function getSupabaseClient(): Promise<SupabaseClient | null> {
-  const sync = getSyncSupabaseClient();
-  if (sync) {
-    return sync;
+  if (cachedClient) {
+    return cachedClient;
   }
 
   if (initPromise) {
@@ -51,34 +50,34 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
   initPromise = (async () => {
     try {
       const response = await fetch('/api/supabase-config');
-      if (!response.ok) {
-        return null;
+      if (response.ok) {
+        const data = (await response.json()) as {
+          url?: unknown;
+          publishableKey?: unknown;
+        };
+        if (
+          typeof data.url === 'string' &&
+          data.url.startsWith('https://') &&
+          typeof data.publishableKey === 'string' &&
+          data.publishableKey.length > 0
+        ) {
+          cachedClient = createClient(data.url, data.publishableKey, {
+            auth: {
+              persistSession: true,
+              autoRefreshToken: true,
+              detectSessionInUrl: true,
+            },
+          });
+          return cachedClient;
+        }
       }
-      const data = (await response.json()) as {
-        url?: unknown;
-        publishableKey?: unknown;
-      };
-      if (
-        typeof data.url === 'string' &&
-        data.url.startsWith('https://') &&
-        typeof data.publishableKey === 'string' &&
-        data.publishableKey.length > 0
-      ) {
-        cachedClient = createClient(data.url, data.publishableKey, {
-          auth: {
-            persistSession: true,
-            autoRefreshToken: true,
-            detectSessionInUrl: true,
-          },
-        });
-        return cachedClient;
-      }
-      return null;
     } catch {
-      return null;
+      // Fall back to build-time Vite env if /api/supabase-config is unreachable
     } finally {
       initPromise = null;
     }
+
+    return getSyncSupabaseClient();
   })();
 
   return initPromise;

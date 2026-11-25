@@ -13,8 +13,8 @@ export function resolvePublicSupabaseConfig(): {
   publishableKey: string;
 } | null {
   const rawUrl = (
-    process.env.VITE_SUPABASE_URL?.trim() ||
     process.env.SUPABASE_URL?.trim() ||
+    process.env.VITE_SUPABASE_URL?.trim() ||
     ''
   ).replace(/\/+$/, '');
   const projectId = process.env.SUPABASE_PROJECT_ID?.trim() || '';
@@ -24,10 +24,10 @@ export function resolvePublicSupabaseConfig(): {
       ? `https://${projectId}.supabase.co`
       : '');
   const publishableKey =
-    process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ||
-    process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
     process.env.SUPABASE_PUBLISHABLE_KEY?.trim() ||
     process.env.SUPABASE_ANON_KEY?.trim() ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ||
+    process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
     '';
 
   if (!url || !url.startsWith('https://') || !publishableKey) {
