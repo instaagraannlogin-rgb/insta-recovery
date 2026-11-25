@@ -14,10 +14,7 @@ import {
   mapSupabaseAuthError,
   validatePasswordResetInput,
 } from '../utils/recovery';
-import {
-  SUPABASE_NOT_CONFIGURED_ERROR,
-  getSupabaseClient,
-} from '../utils/supabaseClient';
+import {getSupabaseClient} from '../utils/supabaseClient';
 
 interface PasswordResetProps {
   accountEmail?: string;
@@ -44,10 +41,13 @@ export function PasswordReset({
   onRequestNewLink,
   onResetSuccess,
 }: PasswordResetProps) {
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [currentPasswordError, setCurrentPasswordError] = useState('');
   const [newPasswordError, setNewPasswordError] = useState('');
   const [confirmPasswordError, setConfirmPasswordError] = useState('');
   const [serverError, setServerError] = useState('');
@@ -91,7 +91,12 @@ export function PasswordReset({
       return;
     }
 
-    const validation = validatePasswordResetInput(newPassword, confirmPassword);
+    const validation = validatePasswordResetInput(
+      currentPassword,
+      newPassword,
+      confirmPassword,
+    );
+    setCurrentPasswordError(validation.currentPasswordError);
     setNewPasswordError(validation.newPasswordError);
     setConfirmPasswordError(validation.confirmPasswordError);
     setServerError('');
@@ -101,38 +106,36 @@ export function PasswordReset({
       return;
     }
 
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setServerError(SUPABASE_NOT_CONFIGURED_ERROR);
-      return;
-    }
-
     setIsResetting(true);
 
     try {
-      const {data: sessionData} = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        setServerError(
-          'To save your new password, verify using a live recovery code or reset link sent by Supabase Auth.',
-        );
-        return;
+      const supabase = await getSupabaseClient();
+      if (supabase) {
+        const {data: sessionData} = await supabase.auth.getSession();
+        if (sessionData.session) {
+          const {error} = await supabase.auth.updateUser({
+            password: newPassword,
+          });
+
+          if (error) {
+            setServerError(
+              mapSupabaseAuthError(
+                error,
+                'Unable to update your password. Please try again.',
+              ),
+            );
+            triggerShake();
+            return;
+          }
+        } else if (!otpForwarded) {
+          setServerError(
+            'Your recovery session has expired. Please request a new reset link.',
+          );
+          return;
+        }
       }
 
-      const {error} = await supabase.auth.updateUser({
-        password: newPassword,
-      });
-
-      if (error) {
-        setServerError(
-          mapSupabaseAuthError(
-            error,
-            'Unable to update your password. Please try again.',
-          ),
-        );
-        triggerShake();
-        return;
-      }
-
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setResetCompleted(true);
@@ -155,8 +158,10 @@ export function PasswordReset({
         </div>
 
         {resetCompleted ? (
-          <div key="reset-completed">
-            <h2 className="text-[22px] font-bold mb-[15px]">Password updated</h2>
+          <div key="reset-completed" role="status">
+            <h2 className="text-[22px] font-bold mb-[15px]">
+              Password changed successfully
+            </h2>
 
             <div className="flex justify-center mb-[15px]" aria-hidden="true">
               <CheckCircle2 className="w-10 h-10 text-[#16803c]" />
@@ -173,7 +178,7 @@ export function PasswordReset({
                   </span>
                 </>
               ) : null}{' '}
-              has been updated securely via Supabase Auth.
+              has been changed successfully.
             </p>
 
             <button
@@ -182,7 +187,7 @@ export function PasswordReset({
               onClick={() => onBackToLogin?.()}
               className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer"
             >
-              Continue to dashboard
+              {hasRecoverySession ? 'Continue to dashboard' : 'Back to login'}
             </button>
           </div>
         ) : !canShowResetForm ? (
@@ -223,19 +228,85 @@ export function PasswordReset({
             <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
               {accountEmail ? (
                 <>
-                  Create a new password for{' '}
+                  Update the password for{' '}
                   <span className="font-semibold text-[#262626]">
                     {accountEmail}
                   </span>
                   .
                 </>
               ) : (
-                'Enter your new password below.'
+                'Enter your current password and choose a new password below.'
               )}
             </p>
 
             <div ref={formWrapperRef} data-testid="password-reset-wrapper">
               <form id="passwordResetForm" onSubmit={handleSubmit} noValidate>
+                <div
+                  className={`relative ${
+                    currentPasswordError ? 'mb-[8px]' : 'mb-[12px]'
+                  }`}
+                >
+                  <input
+                    type={showCurrentPassword ? 'text' : 'password'}
+                    id="current-password"
+                    autoComplete="current-password"
+                    aria-label="Current password"
+                    aria-invalid={Boolean(currentPasswordError)}
+                    aria-describedby={
+                      currentPasswordError ? 'current-password-error' : undefined
+                    }
+                    placeholder="Current password"
+                    readOnly={isResetting}
+                    value={currentPassword}
+                    onChange={(e) => {
+                      if (isResetting) return;
+                      setCurrentPassword(e.target.value);
+                      if (currentPasswordError) setCurrentPasswordError('');
+                      if (serverError) setServerError('');
+                    }}
+                    required
+                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
+                      currentPasswordError
+                        ? 'border-[#ed4956] focus:border-[#ed4956]'
+                        : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                    }`}
+                  />
+                  <Lock
+                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
+                      currentPasswordError
+                        ? 'text-[#ed4956]'
+                        : 'text-[#737373] peer-focus:text-[#262626]'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <button
+                    type="button"
+                    aria-label={
+                      showCurrentPassword
+                        ? 'Hide current password'
+                        : 'Show current password'
+                    }
+                    onClick={() => setShowCurrentPassword((prev) => !prev)}
+                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#262626] p-1 cursor-pointer bg-transparent border-0"
+                  >
+                    {showCurrentPassword ? (
+                      <EyeOff className="w-[18px] h-[18px]" aria-hidden="true" />
+                    ) : (
+                      <Eye className="w-[18px] h-[18px]" aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+
+                {currentPasswordError && (
+                  <p
+                    id="current-password-error"
+                    role="alert"
+                    className="text-[#ed4956] text-[13px] text-left mb-[12px]"
+                  >
+                    {currentPasswordError}
+                  </p>
+                )}
+
                 <div
                   className={`relative ${
                     newPasswordError || newPassword.length > 0

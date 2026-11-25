@@ -95,19 +95,31 @@ test('validateLoginInput validates email and password fields', () => {
   assert.equal(validResult.passwordError, '');
 });
 
-test('validatePasswordResetInput validates new and confirm passwords', () => {
-  const emptyResult = validatePasswordResetInput('', '');
+test('validatePasswordResetInput validates current, new, and confirm passwords', async () => {
+  const mod = await import('./recovery');
+  const emptyResult = validatePasswordResetInput('', '', '');
   assert.equal(emptyResult.isValid, false);
+  assert.equal(emptyResult.currentPasswordError, mod.EMPTY_CURRENT_PASSWORD_ERROR);
   assert.equal(emptyResult.newPasswordError, EMPTY_PASSWORD_ERROR);
   assert.equal(emptyResult.confirmPasswordError, CONFIRM_PASSWORD_EMPTY_ERROR);
 
-  const mismatchResult = validatePasswordResetInput('secret123', 'secret456');
+  const mismatchResult = validatePasswordResetInput(
+    'current123',
+    'secret123',
+    'secret456',
+  );
   assert.equal(mismatchResult.isValid, false);
+  assert.equal(mismatchResult.currentPasswordError, '');
   assert.equal(mismatchResult.newPasswordError, '');
   assert.equal(mismatchResult.confirmPasswordError, PASSWORD_MISMATCH_ERROR);
 
-  const validResult = validatePasswordResetInput('secret123', 'secret123');
+  const validResult = validatePasswordResetInput(
+    'current123',
+    'secret123',
+    'secret123',
+  );
   assert.equal(validResult.isValid, true);
+  assert.equal(validResult.currentPasswordError, '');
   assert.equal(validResult.newPasswordError, '');
   assert.equal(validResult.confirmPasswordError, '');
 });

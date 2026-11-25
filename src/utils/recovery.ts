@@ -160,11 +160,16 @@ export function validateLoginInput(
   };
 }
 
+export const EMPTY_CURRENT_PASSWORD_ERROR =
+  'Please enter your current password.';
 export const CONFIRM_PASSWORD_EMPTY_ERROR = 'Please confirm your new password.';
 export const PASSWORD_MISMATCH_ERROR = 'Passwords do not match.';
 
 export const passwordResetSchema = z
   .object({
+    currentPassword: z
+      .string({error: EMPTY_CURRENT_PASSWORD_ERROR})
+      .min(1, {error: EMPTY_CURRENT_PASSWORD_ERROR}),
     newPassword: passwordSchema,
     confirmPassword: z
       .string({error: CONFIRM_PASSWORD_EMPTY_ERROR})
@@ -184,31 +189,38 @@ export const passwordResetSchema = z
   });
 
 export interface PasswordResetValidationResult {
+  currentPasswordError: string;
   newPasswordError: string;
   confirmPasswordError: string;
   isValid: boolean;
 }
 
 export function validatePasswordResetInput(
+  currentPassword: string,
   newPassword: string,
   confirmPassword: string,
 ): PasswordResetValidationResult {
   const parsed = passwordResetSchema.safeParse({
+    currentPassword,
     newPassword,
     confirmPassword,
   });
   if (parsed.success) {
     return {
+      currentPasswordError: '',
       newPasswordError: '',
       confirmPasswordError: '',
       isValid: true,
     };
   }
 
+  let currentPasswordError = '';
   let newPasswordError = '';
   let confirmPasswordError = '';
   for (const issue of parsed.error.issues) {
-    if (issue.path[0] === 'newPassword' && !newPasswordError) {
+    if (issue.path[0] === 'currentPassword' && !currentPasswordError) {
+      currentPasswordError = issue.message;
+    } else if (issue.path[0] === 'newPassword' && !newPasswordError) {
       newPasswordError = issue.message;
     } else if (issue.path[0] === 'confirmPassword' && !confirmPasswordError) {
       confirmPasswordError = issue.message;
@@ -216,6 +228,7 @@ export function validatePasswordResetInput(
   }
 
   return {
+    currentPasswordError,
     newPasswordError,
     confirmPasswordError,
     isValid: false,

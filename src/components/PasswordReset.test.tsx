@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {
   CONFIRM_PASSWORD_EMPTY_ERROR,
+  EMPTY_CURRENT_PASSWORD_ERROR,
   EMPTY_PASSWORD_ERROR,
   PASSWORD_MISMATCH_ERROR,
   SHORT_PASSWORD_ERROR,
@@ -52,7 +53,7 @@ describe('PasswordReset', () => {
     expect(onRequestNewLink).toHaveBeenCalledTimes(1);
   });
 
-  it('validates new and confirm passwords and supports real-time match feedback', async () => {
+  it('validates current, new, and confirm passwords and supports real-time match feedback', async () => {
     const user = userEvent.setup();
     render(
       <PasswordReset accountEmail="alex@example.com" hasRecoverySession={true} />,
@@ -60,10 +61,12 @@ describe('PasswordReset', () => {
 
     await user.click(screen.getByRole('button', {name: 'Reset Password'}));
     const alerts = screen.getAllByRole('alert');
-    expect(alerts[0]).toHaveTextContent(EMPTY_PASSWORD_ERROR);
-    expect(alerts[1]).toHaveTextContent(CONFIRM_PASSWORD_EMPTY_ERROR);
+    expect(alerts[0]).toHaveTextContent(EMPTY_CURRENT_PASSWORD_ERROR);
+    expect(alerts[1]).toHaveTextContent(EMPTY_PASSWORD_ERROR);
+    expect(alerts[2]).toHaveTextContent(CONFIRM_PASSWORD_EMPTY_ERROR);
     expect(updateUserMock).not.toHaveBeenCalled();
 
+    await user.type(screen.getByLabelText('Current password'), 'OldPass123');
     const newPwd = screen.getByLabelText('New password');
     const confirmPwd = screen.getByLabelText('Confirm password');
     await user.type(newPwd, '123');
@@ -78,7 +81,7 @@ describe('PasswordReset', () => {
     expect(updatedAlerts[1]).toHaveTextContent(PASSWORD_MISMATCH_ERROR);
   });
 
-  it('updates password via supabase.auth.updateUser and shows completion view', async () => {
+  it('updates password via supabase.auth.updateUser and displays Password changed successfully', async () => {
     const user = userEvent.setup();
     const onResetSuccess = vi.fn();
     const onBackToLogin = vi.fn();
@@ -93,6 +96,7 @@ describe('PasswordReset', () => {
       />,
     );
 
+    await user.type(screen.getByLabelText('Current password'), 'OldPass123');
     await user.type(screen.getByLabelText('New password'), 'StrongPass123');
     await user.type(screen.getByLabelText('Confirm password'), 'StrongPass123');
     expect(screen.getByTestId('password-match-status')).toHaveTextContent(
@@ -103,7 +107,7 @@ describe('PasswordReset', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole('heading', {name: 'Password updated'}),
+        screen.getByRole('heading', {name: 'Password changed successfully'}),
       ).toBeInTheDocument();
     });
     expect(updateUserMock).toHaveBeenCalledWith({password: 'StrongPass123'});
@@ -115,8 +119,10 @@ describe('PasswordReset', () => {
     expect(onBackToLogin).toHaveBeenCalledTimes(1);
   });
 
-  it('displays password strength meter progression from Weak to Strong and renders when otpForwarded is true', async () => {
+  it('displays password strength meter progression and Password changed successfully for otpForwarded flow', async () => {
     const user = userEvent.setup();
+    getSessionMock.mockResolvedValueOnce({data: {session: null}});
+
     render(
       <PasswordReset
         accountEmail="alex@example.com"
@@ -132,6 +138,7 @@ describe('PasswordReset', () => {
       screen.queryByTestId('password-strength-meter'),
     ).not.toBeInTheDocument();
 
+    await user.type(screen.getByLabelText('Current password'), 'OldPass123');
     const newPwd = screen.getByLabelText('New password');
     await user.type(newPwd, 'abc');
     expect(screen.getByTestId('password-strength-meter')).toBeInTheDocument();
@@ -147,5 +154,13 @@ describe('PasswordReset', () => {
     expect(
       screen.getByRole('progressbar', {name: 'Password strength'}),
     ).toHaveAttribute('aria-valuenow', '4');
+
+    await user.type(screen.getByLabelText('Confirm password'), 'Abcdef12!');
+    await user.click(screen.getByRole('button', {name: 'Reset Password'}));
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Password changed successfully',
+      }),
+    ).toBeInTheDocument();
   });
 });

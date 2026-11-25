@@ -180,7 +180,7 @@ export default function App() {
             setView('recovery');
           }}
           onResetSuccess={() => {
-            showToast('Your password has been updated.', 'Password updated');
+            showToast('Password changed successfully.', 'Password updated');
           }}
         />
       ) : (
