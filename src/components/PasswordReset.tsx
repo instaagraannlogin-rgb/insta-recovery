@@ -1,6 +1,7 @@
 import {FormEvent, useRef, useState} from 'react';
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -9,6 +10,7 @@ import {
 } from 'lucide-react';
 import {
   getPasswordMatchStatus,
+  getPasswordStrength,
   mapSupabaseAuthError,
   validatePasswordResetInput,
 } from '../utils/recovery';
@@ -20,14 +22,24 @@ import {
 interface PasswordResetProps {
   accountEmail?: string;
   hasRecoverySession: boolean;
+  otpForwarded?: boolean;
   onBackToLogin?: () => void;
   onRequestNewLink?: () => void;
   onResetSuccess?: () => void;
 }
 
+const STRENGTH_COLOR_MAP = {
+  0: {bar: 'bg-[#e5e7eb]', text: 'text-[#737373]'},
+  1: {bar: 'bg-[#ed4956]', text: 'text-[#ed4956]'},
+  2: {bar: 'bg-[#d97706]', text: 'text-[#d97706]'},
+  3: {bar: 'bg-[#0095f6]', text: 'text-[#0095f6]'},
+  4: {bar: 'bg-[#16803c]', text: 'text-[#16803c]'},
+} as const;
+
 export function PasswordReset({
   accountEmail,
   hasRecoverySession,
+  otpForwarded = false,
   onBackToLogin,
   onRequestNewLink,
   onResetSuccess,
@@ -43,7 +55,10 @@ export function PasswordReset({
   const [isResetting, setIsResetting] = useState(false);
   const formWrapperRef = useRef<HTMLDivElement | null>(null);
 
+  const canShowResetForm = hasRecoverySession || otpForwarded;
   const matchStatus = getPasswordMatchStatus(newPassword, confirmPassword);
+  const strength = getPasswordStrength(newPassword);
+  const strengthColors = STRENGTH_COLOR_MAP[strength.score];
 
   const triggerShake = () => {
     if (
@@ -98,7 +113,7 @@ export function PasswordReset({
       const {data: sessionData} = await supabase.auth.getSession();
       if (!sessionData.session) {
         setServerError(
-          'Your recovery link is missing or has expired. Please request a new password reset link.',
+          'To save your new password, verify using a live recovery code or reset link sent by Supabase Auth.',
         );
         return;
       }
@@ -170,7 +185,7 @@ export function PasswordReset({
               Continue to dashboard
             </button>
           </div>
-        ) : !hasRecoverySession ? (
+        ) : !canShowResetForm ? (
           <div>
             <h2 className="text-[22px] font-bold mb-[15px]">
               Reset link required
@@ -222,7 +237,11 @@ export function PasswordReset({
             <div ref={formWrapperRef} data-testid="password-reset-wrapper">
               <form id="passwordResetForm" onSubmit={handleSubmit} noValidate>
                 <div
-                  className={`relative ${newPasswordError ? 'mb-[8px]' : 'mb-[12px]'}`}
+                  className={`relative ${
+                    newPasswordError || newPassword.length > 0
+                      ? 'mb-[8px]'
+                      : 'mb-[12px]'
+                  }`}
                 >
                   <input
                     type={showNewPassword ? 'text' : 'password'}
@@ -231,7 +250,11 @@ export function PasswordReset({
                     aria-label="New password"
                     aria-invalid={Boolean(newPasswordError)}
                     aria-describedby={
-                      newPasswordError ? 'new-password-error' : undefined
+                      newPasswordError
+                        ? 'new-password-error'
+                        : newPassword.length > 0
+                          ? 'password-strength-meter'
+                          : undefined
                     }
                     placeholder="New password"
                     readOnly={isResetting}
@@ -280,10 +303,76 @@ export function PasswordReset({
                   <p
                     id="new-password-error"
                     role="alert"
-                    className="text-[#ed4956] text-[13px] text-left mb-[12px]"
+                    className="text-[#ed4956] text-[13px] text-left mb-[10px]"
                   >
                     {newPasswordError}
                   </p>
+                )}
+
+                {newPassword.length > 0 && (
+                  <div
+                    id="password-strength-meter"
+                    data-testid="password-strength-meter"
+                    aria-live="polite"
+                    className="text-left mb-[12px] p-2.5 bg-[#fafafa] border border-[#efefef] rounded-[5px]"
+                  >
+                    <div className="flex items-center justify-between text-[12px] mb-1.5">
+                      <span className="text-[#737373]">Password strength</span>
+                      <span
+                        data-testid="password-strength-label"
+                        className={`font-semibold ${strengthColors.text}`}
+                      >
+                        {strength.label}
+                      </span>
+                    </div>
+
+                    <div
+                      className="flex gap-1.5 mb-2"
+                      role="progressbar"
+                      aria-label="Password strength"
+                      aria-valuemin={0}
+                      aria-valuemax={4}
+                      aria-valuenow={strength.score}
+                    >
+                      {[1, 2, 3, 4].map((segment) => (
+                        <div
+                          key={segment}
+                          className={`h-1.5 flex-1 rounded-full transition-colors ${
+                            strength.score >= segment
+                              ? strengthColors.bar
+                              : 'bg-[#e5e7eb]'
+                          }`}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
+                      {[
+                        {met: strength.checks.minLength, text: '8+ characters'},
+                        {
+                          met: strength.checks.hasMixedCase,
+                          text: 'Upper & lower',
+                        },
+                        {met: strength.checks.hasNumber, text: 'Number'},
+                        {met: strength.checks.hasSymbol, text: 'Symbol'},
+                      ].map((req) => (
+                        <div
+                          key={req.text}
+                          className={`flex items-center gap-1 ${
+                            req.met ? 'text-[#16803c]' : 'text-[#737373]'
+                          }`}
+                        >
+                          <Check
+                            className={`w-3 h-3 shrink-0 ${
+                              req.met ? 'opacity-100' : 'opacity-35'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          <span>{req.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
                 <div
@@ -315,7 +404,7 @@ export function PasswordReset({
                     readOnly={isResetting}
                     value={confirmPassword}
                     onChange={(e) => {
-                      if (isSubmittingReset(isResetting)) return;
+                      if (isResetting) return;
                       setConfirmPassword(e.target.value);
                       if (confirmPasswordError) setConfirmPasswordError('');
                       if (serverError) setServerError('');
@@ -437,8 +526,4 @@ export function PasswordReset({
       </div>
     </main>
   );
-}
-
-function isSubmittingReset(flag: boolean): boolean {
-  return flag;
 }

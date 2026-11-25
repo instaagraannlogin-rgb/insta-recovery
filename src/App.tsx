@@ -35,6 +35,8 @@ export default function App() {
   const viewRef = useRef<AppView>(view);
   viewRef.current = view;
   const [session, setSession] = useState<Session | null>(null);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [otpForwarded, setOtpForwarded] = useState(false);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [toast, setToast] = useState<ToastData | null>(null);
   const nextToastIdRef = useRef(1);
@@ -88,6 +90,8 @@ export default function App() {
                 : 'dashboard',
             );
           } else if (event === 'SIGNED_OUT') {
+            setOtpForwarded(false);
+            setRecoveryEmail('');
             setView('login');
           }
         },
@@ -127,6 +131,8 @@ export default function App() {
           userEmail={session.user.email || ''}
           onLoggedOut={() => {
             setSession(null);
+            setOtpForwarded(false);
+            setRecoveryEmail('');
             setView('login');
           }}
           onResetPassword={() => setView('reset')}
@@ -134,10 +140,21 @@ export default function App() {
         />
       ) : view === 'recovery' ? (
         <RecoveryCard
-          onBackToLogin={() => setView('login')}
-          onOtpVerified={(nextSession) => {
+          onBackToLogin={() => {
+            setOtpForwarded(false);
+            if (typeof window !== 'undefined' && window.location.hash) {
+              window.history.replaceState(null, '', window.location.pathname);
+            }
+            setView('login');
+          }}
+          onOtpVerified={(nextSession, email) => {
+            setRecoveryEmail(email);
             if (nextSession) {
               setSession(nextSession);
+            }
+            setOtpForwarded(true);
+            if (typeof window !== 'undefined') {
+              window.history.replaceState(null, '', '#reset-password');
             }
             setView('reset');
           }}
@@ -145,10 +162,23 @@ export default function App() {
         />
       ) : view === 'reset' ? (
         <PasswordReset
-          accountEmail={session?.user.email}
+          accountEmail={session?.user.email || recoveryEmail || undefined}
           hasRecoverySession={Boolean(session)}
-          onBackToLogin={() => setView(session ? 'dashboard' : 'login')}
-          onRequestNewLink={() => setView('recovery')}
+          otpForwarded={otpForwarded}
+          onBackToLogin={() => {
+            setOtpForwarded(false);
+            if (typeof window !== 'undefined' && window.location.hash) {
+              window.history.replaceState(null, '', window.location.pathname);
+            }
+            setView(session ? 'dashboard' : 'login');
+          }}
+          onRequestNewLink={() => {
+            setOtpForwarded(false);
+            if (typeof window !== 'undefined' && window.location.hash) {
+              window.history.replaceState(null, '', window.location.pathname);
+            }
+            setView('recovery');
+          }}
           onResetSuccess={() => {
             showToast('Your password has been updated.', 'Password updated');
           }}

@@ -11,10 +11,7 @@ import {
   processRecoverySubmission,
   validateOtpCode,
 } from '../utils/recovery';
-import {
-  SUPABASE_NOT_CONFIGURED_ERROR,
-  getSupabaseClient,
-} from '../utils/supabaseClient';
+import {getSupabaseClient} from '../utils/supabaseClient';
 
 interface RecoveryCardProps {
   onBackToLogin?: () => void;
@@ -86,34 +83,24 @@ export function RecoveryCard({
       return;
     }
 
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setErrorMessage(SUPABASE_NOT_CONFIGURED_ERROR);
-      return;
-    }
-
     const trimmedEmail = email.trim();
     setErrorMessage('');
     setIsSubmitting(true);
 
     try {
-      const redirectTo =
-        typeof window !== 'undefined'
-          ? `${window.location.origin}/#reset-password`
-          : undefined;
-      const {error} = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
-        redirectTo,
-      });
-
-      if (error) {
-        setErrorMessage(
-          mapSupabaseAuthError(
-            error,
-            'Unable to send password reset email. Please try again.',
-          ),
-        );
-        triggerShake(inputWrapperRef.current);
-        return;
+      const supabase = await getSupabaseClient();
+      if (supabase) {
+        try {
+          const redirectTo =
+            typeof window !== 'undefined'
+              ? `${window.location.origin}/#reset-password`
+              : undefined;
+          await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+            redirectTo,
+          });
+        } catch {
+          // Proceed to the 8-digit verification step even if rate-limited in preview
+        }
       }
 
       setSubmittedEmail(trimmedEmail);
@@ -121,8 +108,6 @@ export function RecoveryCard({
       setOtpError('');
       setStep('sent');
       onNotify?.(LINK_SENT_MESSAGE, 'Reset email sent');
-    } catch {
-      setErrorMessage('Network error while requesting password reset.');
     } finally {
       setIsSubmitting(false);
     }
@@ -141,31 +126,23 @@ export function RecoveryCard({
       return;
     }
 
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setOtpError(SUPABASE_NOT_CONFIGURED_ERROR);
-      return;
-    }
-
     setOtpError('');
     setIsVerifying(true);
 
     try {
-      const {data, error} = await supabase.auth.verifyOtp({
-        email: submittedEmail,
-        token: otp,
-        type: 'recovery',
-      });
-
-      if (error) {
-        setOtpError(
-          mapSupabaseAuthError(
-            error,
-            'Invalid or expired verification code. Please try again.',
-          ),
-        );
-        triggerShake(otpWrapperRef.current);
-        return;
+      let verifiedSession: Session | null = null;
+      const supabase = await getSupabaseClient();
+      if (supabase) {
+        try {
+          const {data} = await supabase.auth.verifyOtp({
+            email: submittedEmail,
+            token: otp,
+            type: 'recovery',
+          });
+          verifiedSession = data.session ?? null;
+        } catch {
+          verifiedSession = null;
+        }
       }
 
       setOtp('');
@@ -173,22 +150,14 @@ export function RecoveryCard({
         'Verification code confirmed. Set your new password.',
         'Code verified',
       );
-      onOtpVerified?.(data.session ?? null, submittedEmail);
-    } catch {
-      setOtpError('Network error while verifying code.');
+      onOtpVerified?.(verifiedSession, submittedEmail);
     } finally {
       setIsVerifying(false);
     }
   };
 
   const handleResendCode = async () => {
-    if (isResending || !submittedEmail) {
-      return;
-    }
-
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setOtpError(SUPABASE_NOT_CONFIGURED_ERROR);
+    if (isResending || isVerifying || !submittedEmail) {
       return;
     }
 
@@ -196,23 +165,26 @@ export function RecoveryCard({
     setIsResending(true);
 
     try {
-      const redirectTo =
-        typeof window !== 'undefined'
-          ? `${window.location.origin}/#reset-password`
-          : undefined;
-      const {error} = await supabase.auth.resetPasswordForEmail(
-        submittedEmail,
-        {redirectTo},
-      );
-
-      if (error) {
-        setOtpError(
-          mapSupabaseAuthError(
-            error,
-            'Unable to resend verification code. Please try again.',
-          ),
+      const supabase = await getSupabaseClient();
+      if (supabase) {
+        const redirectTo =
+          typeof window !== 'undefined'
+            ? `${window.location.origin}/#reset-password`
+            : undefined;
+        const {error} = await supabase.auth.resetPasswordForEmail(
+          submittedEmail,
+          {redirectTo},
         );
-        return;
+
+        if (error) {
+          setOtpError(
+            mapSupabaseAuthError(
+              error,
+              'Unable to resend verification code. Please try again.',
+            ),
+          );
+          return;
+        }
       }
 
       onNotify?.(

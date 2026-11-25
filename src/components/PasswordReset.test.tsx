@@ -114,4 +114,38 @@ describe('PasswordReset', () => {
     );
     expect(onBackToLogin).toHaveBeenCalledTimes(1);
   });
+
+  it('displays password strength meter progression from Weak to Strong and renders when otpForwarded is true', async () => {
+    const user = userEvent.setup();
+    render(
+      <PasswordReset
+        accountEmail="alex@example.com"
+        hasRecoverySession={false}
+        otpForwarded={true}
+      />,
+    );
+
+    expect(
+      screen.getByRole('heading', {name: 'Set a new password'}),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('password-strength-meter'),
+    ).not.toBeInTheDocument();
+
+    const newPwd = screen.getByLabelText('New password');
+    await user.type(newPwd, 'abc');
+    expect(screen.getByTestId('password-strength-meter')).toBeInTheDocument();
+    expect(screen.getByTestId('password-strength-label')).toHaveTextContent(
+      'Weak',
+    );
+
+    await user.clear(newPwd);
+    await user.type(newPwd, 'Abcdef12!');
+    expect(screen.getByTestId('password-strength-label')).toHaveTextContent(
+      'Strong',
+    );
+    expect(
+      screen.getByRole('progressbar', {name: 'Password strength'}),
+    ).toHaveAttribute('aria-valuenow', '4');
+  });
 });

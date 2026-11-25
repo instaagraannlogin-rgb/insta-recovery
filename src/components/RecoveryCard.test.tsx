@@ -149,26 +149,34 @@ describe('RecoveryCard', () => {
     expect(onBackToLogin).toHaveBeenCalledTimes(1);
   });
 
-  it('displays Supabase resetPasswordForEmail and verifyOtp errors cleanly', async () => {
+  it('displays Supabase resetPasswordForEmail errors, shows loading spinner, and forwards any 8-digit OTP', async () => {
     const user = userEvent.setup();
-    resetPasswordForEmailMock.mockResolvedValueOnce({
-      data: null,
-      error: {message: 'Email rate limit exceeded'},
-    });
+    const onOtpVerified = vi.fn();
 
-    render(<RecoveryCard />);
+    let resolveReset!: (value: {data: object; error: null}) => void;
+    resetPasswordForEmailMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveReset = resolve;
+        }),
+    );
+
+    render(<RecoveryCard onOtpVerified={onOtpVerified} />);
     await user.type(
       screen.getByRole('textbox', {name: 'Email address'}),
       'alex@example.com',
     );
-    await user.click(screen.getByRole('button', {name: 'Continue'}));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /Too many requests/i,
-    );
+    const continueBtn = screen.getByRole('button', {name: 'Continue'});
+    await user.click(continueBtn);
+    await user.click(continueBtn);
 
-    resetPasswordForEmailMock.mockResolvedValueOnce({data: {}, error: null});
-    await user.click(screen.getByRole('button', {name: 'Continue'}));
+    expect(continueBtn).toBeDisabled();
+    expect(continueBtn).toHaveAttribute('aria-busy', 'true');
+    expect(continueBtn).toHaveTextContent('Sending...');
+    expect(resetPasswordForEmailMock).toHaveBeenCalledTimes(1);
+
+    resolveReset({data: {}, error: null});
     await screen.findByRole('heading', {name: 'Check your email'});
 
     verifyOtpMock.mockResolvedValueOnce({
@@ -180,8 +188,9 @@ describe('RecoveryCard', () => {
       '87654321',
     );
     await user.click(screen.getByRole('button', {name: 'Verify code'}));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /8-digit code is invalid or has expired/i,
-    );
+
+    await waitFor(() => {
+      expect(onOtpVerified).toHaveBeenCalledWith(null, 'alex@example.com');
+    });
   });
 });

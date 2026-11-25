@@ -182,3 +182,22 @@ test('validateOtpCode and normalizeOtpInput enforce 8-digit numeric OTPs', async
   assert.equal(mod.validateOtpCode('1234567a'), mod.INVALID_OTP_ERROR);
   assert.equal(mod.validateOtpCode('12345678'), '');
 });
+
+test('getPasswordStrength evaluates password strength accurately', async () => {
+  const mod = await import('./recovery');
+  assert.equal(mod.getPasswordStrength('').label, 'Empty');
+  assert.equal(mod.getPasswordStrength('abc').score, 1);
+  assert.equal(mod.getPasswordStrength('abc').label, 'Weak');
+  assert.equal(mod.getPasswordStrength('Abc1!').label, 'Weak');
+  assert.equal(mod.getPasswordStrength('abcdef12').label, 'Fair');
+  assert.equal(mod.getPasswordStrength('Abcdef12').label, 'Good');
+  const strong = mod.getPasswordStrength('Abcdef12!');
+  assert.equal(strong.score, 4);
+  assert.equal(strong.label, 'Strong');
+  assert.deepEqual(strong.checks, {
+    minLength: true,
+    hasMixedCase: true,
+    hasNumber: true,
+    hasSymbol: true,
+  });
+});

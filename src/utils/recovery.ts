@@ -242,6 +242,56 @@ export function getPasswordMatchStatus(
   return {status: 'mismatch', message: 'Passwords do not match'};
 }
 
+export interface PasswordStrengthResult {
+  score: 0 | 1 | 2 | 3 | 4;
+  label: 'Empty' | 'Weak' | 'Fair' | 'Good' | 'Strong';
+  checks: {
+    minLength: boolean;
+    hasMixedCase: boolean;
+    hasNumber: boolean;
+    hasSymbol: boolean;
+  };
+}
+
+export function getPasswordStrength(password: string): PasswordStrengthResult {
+  const checks = {
+    minLength: password.length >= 8,
+    hasMixedCase: /[a-z]/.test(password) && /[A-Z]/.test(password),
+    hasNumber: /\d/.test(password),
+    hasSymbol: /[^A-Za-z0-9]/.test(password),
+  };
+
+  if (password.length === 0) {
+    return {score: 0, label: 'Empty', checks};
+  }
+
+  let score = 0;
+  if (checks.minLength) score += 1;
+  if (checks.hasMixedCase) score += 1;
+  if (checks.hasNumber) score += 1;
+  if (checks.hasSymbol) score += 1;
+
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    score = Math.min(score, 1);
+  } else {
+    score = Math.max(score, 1);
+  }
+
+  const clamped = Math.min(4, Math.max(1, score)) as 1 | 2 | 3 | 4;
+  const labels: Record<1 | 2 | 3 | 4, PasswordStrengthResult['label']> = {
+    1: 'Weak',
+    2: 'Fair',
+    3: 'Good',
+    4: 'Strong',
+  };
+
+  return {
+    score: clamped,
+    label: labels[clamped],
+    checks,
+  };
+}
+
 export const NAME_ERROR = 'Please enter your full name (2–80 characters).';
 export const PHONE_ERROR =
   'Please enter a valid phone number (7–20 digits) or leave it blank.';

@@ -116,4 +116,36 @@ describe('LoginCard', () => {
       /Invalid email or password/i,
     );
   });
+
+  it('shows loading spinner and prevents duplicate submissions while signing in', async () => {
+    const user = userEvent.setup();
+    let resolveLogin!: (value: {data: object; error: null}) => void;
+    signInWithPasswordMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveLogin = resolve;
+        }),
+    );
+
+    render(<LoginCard onForgotPassword={vi.fn()} />);
+    await user.type(
+      screen.getByLabelText('Email address'),
+      'alex@example.com',
+    );
+    await user.type(screen.getByLabelText('Password'), 'Secret123');
+
+    const submitBtn = screen.getByRole('button', {name: 'Log In'});
+    await user.click(submitBtn);
+    await user.click(submitBtn);
+
+    expect(submitBtn).toBeDisabled();
+    expect(submitBtn).toHaveAttribute('aria-busy', 'true');
+    expect(submitBtn).toHaveTextContent('Signing in...');
+    expect(signInWithPasswordMock).toHaveBeenCalledTimes(1);
+
+    resolveLogin({data: {}, error: null});
+    await waitFor(() => {
+      expect(submitBtn).not.toBeDisabled();
+    });
+  });
 });
