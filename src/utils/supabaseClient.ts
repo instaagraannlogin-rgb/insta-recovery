@@ -1,13 +1,75 @@
 import {SupabaseClient, createClient} from '@supabase/supabase-js';
 
 let cachedClient: SupabaseClient | null = null;
+let cachedConfigKey: string | null = null;
+let cachedProjectInfo: {url: string; projectId: string | null} | null = null;
 let initPromise: Promise<SupabaseClient | null> | null = null;
 
+export function extractSupabaseProjectId(url: string): string | null {
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.protocol !== 'https:') {
+      return null;
+    }
+    const match = /^([a-z0-9-]+)\.supabase\.co$/i.exec(parsed.hostname);
+    return match ? match[1].toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDisconnectedProjectAuthStorage(
+  activeUrl: string,
+  storage?: Pick<Storage, 'length' | 'key' | 'removeItem'> | null,
+): string[] {
+  const targetStorage =
+    storage !== undefined
+      ? storage
+      : typeof window !== 'undefined'
+        ? window.localStorage
+        : null;
+  if (!targetStorage) {
+    return [];
+  }
+
+  const activeProjectId = extractSupabaseProjectId(activeUrl);
+  if (!activeProjectId) {
+    return [];
+  }
+
+  const removedKeys: string[] = [];
+  try {
+    const keysToCheck: string[] = [];
+    for (let i = 0; i < targetStorage.length; i += 1) {
+      const key = targetStorage.key(i);
+      if (key) {
+        keysToCheck.push(key);
+      }
+    }
+
+    for (const key of keysToCheck) {
+      const match = /^sb-([a-z0-9-]+)-auth-token/i.exec(key);
+      if (match && match[1].toLowerCase() !== activeProjectId) {
+        targetStorage.removeItem(key);
+        removedKeys.push(key);
+      }
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+
+  return removedKeys;
+}
+
 function readBuildTimeConfig(): {url: string; publishableKey: string} | null {
-  const url = (import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const env =
+    typeof import.meta !== 'undefined' && import.meta.env
+      ? import.meta.env
+      : ({} as Record<string, string | undefined>);
+  const url = (env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
   const publishableKey = (
-    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-    import.meta.env.VITE_SUPABASE_ANON_KEY ||
+    env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    env.VITE_SUPABASE_ANON_KEY ||
     ''
   ).trim();
 
@@ -18,17 +80,25 @@ function readBuildTimeConfig(): {url: string; publishableKey: string} | null {
   return {url, publishableKey};
 }
 
-export function getSyncSupabaseClient(): SupabaseClient | null {
-  if (cachedClient) {
+function createOrReuseClient(config: {
+  url: string;
+  publishableKey: string;
+}): SupabaseClient {
+  const normalizedUrl = config.url.trim().replace(/\/+$/, '');
+  const normalizedKey = config.publishableKey.trim();
+  const nextConfigKey = `${normalizedUrl}|${normalizedKey}`;
+
+  if (cachedClient && cachedConfigKey === nextConfigKey) {
     return cachedClient;
   }
 
-  const config = readBuildTimeConfig();
-  if (!config) {
-    return null;
-  }
-
-  cachedClient = createClient(config.url, config.publishableKey, {
+  clearDisconnectedProjectAuthStorage(normalizedUrl);
+  cachedConfigKey = nextConfigKey;
+  cachedProjectInfo = {
+    url: normalizedUrl,
+    projectId: extractSupabaseProjectId(normalizedUrl),
+  };
+  cachedClient = createClient(normalizedUrl, normalizedKey, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
@@ -36,6 +106,22 @@ export function getSyncSupabaseClient(): SupabaseClient | null {
     },
   });
   return cachedClient;
+}
+
+export function getConnectedSupabaseProject(): {
+  url: string;
+  projectId: string | null;
+} | null {
+  return cachedProjectInfo;
+}
+
+export function getSyncSupabaseClient(): SupabaseClient | null {
+  const config = readBuildTimeConfig();
+  if (!config) {
+    return cachedClient;
+  }
+
+  return createOrReuseClient(config);
 }
 
 export async function getSupabaseClient(): Promise<SupabaseClient | null> {
@@ -61,14 +147,10 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
           typeof data.publishableKey === 'string' &&
           data.publishableKey.length > 0
         ) {
-          cachedClient = createClient(data.url, data.publishableKey, {
-            auth: {
-              persistSession: true,
-              autoRefreshToken: true,
-              detectSessionInUrl: true,
-            },
+          return createOrReuseClient({
+            url: data.url,
+            publishableKey: data.publishableKey,
           });
-          return cachedClient;
         }
       }
     } catch {
@@ -84,4 +166,4 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
 }
 
 export const SUPABASE_NOT_CONFIGURED_ERROR =
-  'Supabase is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Settings -> Secrets.';
+  'Supabase is not configured yet. Add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_*) in Settings -> Secrets.';
