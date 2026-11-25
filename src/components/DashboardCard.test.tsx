@@ -12,6 +12,7 @@ const {
   deleteEqUserMock,
   deleteEqIdMock,
   deleteMock,
+  getSessionMock,
   signOutMock,
 } = vi.hoisted(() => {
   const order = vi.fn();
@@ -22,6 +23,7 @@ const {
   const deleteEqUser = vi.fn();
   const deleteEqId = vi.fn(() => ({eq: deleteEqUser}));
   const del = vi.fn(() => ({eq: deleteEqId}));
+  const getSession = vi.fn();
   const signOut = vi.fn();
   return {
     orderMock: order,
@@ -32,6 +34,7 @@ const {
     deleteEqUserMock: deleteEqUser,
     deleteEqIdMock: deleteEqId,
     deleteMock: del,
+    getSessionMock: getSession,
     signOutMock: signOut,
   };
 });
@@ -40,6 +43,7 @@ vi.mock('../utils/supabaseClient', () => ({
   SUPABASE_NOT_CONFIGURED_ERROR: 'Supabase is not configured.',
   getSupabaseClient: vi.fn(async () => ({
     auth: {
+      getSession: getSessionMock,
       signOut: signOutMock,
     },
     from: vi.fn(() => ({
@@ -58,8 +62,13 @@ describe('DashboardCard', () => {
     singleMock.mockReset();
     insertMock.mockClear();
     deleteEqUserMock.mockReset();
+    getSessionMock.mockReset();
     signOutMock.mockReset();
     orderMock.mockResolvedValue({data: [], error: null});
+    getSessionMock.mockResolvedValue({
+      data: {session: {user: {id: 'user-123'}}},
+      error: null,
+    });
   });
 
   it('displays logged-in user email and logs out securely', async () => {
@@ -94,7 +103,7 @@ describe('DashboardCard', () => {
 
     render(
       <DashboardCard
-        userId="user-123"
+        userId="stale-user-id"
         userEmail="alex@example.com"
         onLoggedOut={vi.fn()}
         onResetPassword={vi.fn()}
@@ -143,13 +152,21 @@ describe('DashboardCard', () => {
     expect(
       await screen.findByText('Please send my invoice receipt.'),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText('Your form submission has been saved securely.'),
+    ).toBeInTheDocument();
   });
 
-  it('surfaces Supabase insert errors and does not ignore database failures', async () => {
+  it('surfaces Supabase insert error code, details, and hint without claiming success', async () => {
     const user = userEvent.setup();
     singleMock.mockResolvedValueOnce({
       data: null,
-      error: {message: 'new row violates row-level security policy'},
+      error: {
+        code: '42501',
+        message: 'new row violates row-level security policy',
+        details: 'Failing row contains (user_id).',
+        hint: 'Ensure authenticated role has INSERT privilege.',
+      },
     });
 
     render(
@@ -169,9 +186,44 @@ describe('DashboardCard', () => {
     );
     await user.click(screen.getByRole('button', {name: 'Submit Form'}));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'new row violates row-level security policy',
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('[42501]');
+    expect(alert).toHaveTextContent('new row violates row-level security policy');
+    expect(alert).toHaveTextContent('Failing row contains (user_id).');
+    expect(alert).toHaveTextContent(
+      'Hint: Ensure authenticated role has INSERT privilege.',
     );
+    expect(
+      screen.queryByText(/Your form submission has been saved securely/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('blocks submission and surfaces a clear error when the Supabase session has expired', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <DashboardCard
+        userId="user-123"
+        userEmail="alex@example.com"
+        onLoggedOut={vi.fn()}
+        onResetPassword={vi.fn()}
+      />,
+    );
+
+    await screen.findByText(/No submissions yet/i);
+    getSessionMock.mockResolvedValueOnce({data: {session: null}, error: null});
+
+    await user.type(screen.getByLabelText('Full name'), 'Alex Morgan');
+    await user.type(
+      screen.getByLabelText('Message'),
+      'Testing expired session handling.',
+    );
+    await user.click(screen.getByRole('button', {name: 'Submit Form'}));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your session has expired. Please sign in again before submitting.',
+    );
+    expect(insertMock).not.toHaveBeenCalled();
     expect(
       screen.queryByText(/Your form submission has been saved securely/i),
     ).not.toBeInTheDocument();

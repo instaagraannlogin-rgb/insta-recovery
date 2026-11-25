@@ -33,6 +33,33 @@ interface DashboardCardProps {
   onNotify?: (message: string, title?: string) => void;
 }
 
+interface SupabaseErrorLike {
+  code?: unknown;
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+}
+
+function formatSupabaseError(error: unknown, fallback: string): string {
+  if (!error || typeof error !== 'object') {
+    return error instanceof Error && error.message ? error.message : fallback;
+  }
+
+  const err = error as SupabaseErrorLike;
+  const code = typeof err.code === 'string' ? err.code.trim() : '';
+  const message = typeof err.message === 'string' ? err.message.trim() : '';
+  const details = typeof err.details === 'string' ? err.details.trim() : '';
+  const hint = typeof err.hint === 'string' ? err.hint.trim() : '';
+
+  const parts: string[] = [];
+  if (code) parts.push(`[${code}]`);
+  if (message) parts.push(message);
+  if (details && details !== message) parts.push(details);
+  if (hint) parts.push(`Hint: ${hint}`);
+
+  return parts.length > 0 ? parts.join(' — ') : fallback;
+}
+
 export function DashboardCard({
   userId,
   userEmail,
@@ -70,19 +97,43 @@ export function DashboardCard({
     }
 
     try {
+      if (typeof supabase.auth?.getSession === 'function') {
+        const {data: sessionData, error: sessionError} =
+          await supabase.auth.getSession();
+        if (sessionError) {
+          setListError(
+            formatSupabaseError(
+              sessionError,
+              'Unable to verify your active session.',
+            ),
+          );
+          return;
+        }
+        if (!sessionData?.session?.user?.id) {
+          setListError('Your session has expired. Please sign in again.');
+          return;
+        }
+      }
+
       const {data, error} = await supabase
         .from('contact_submissions')
         .select('id, user_id, name, email, phone_number, message, created_at')
         .order('created_at', {ascending: false});
 
       if (error) {
-        setListError(error.message || 'Unable to load your submissions.');
+        setListError(
+          formatSupabaseError(error, 'Unable to load your submissions.'),
+        );
         return;
       }
 
       setSubmissions((data as ContactSubmissionRecord[]) || []);
-    } catch {
-      setListError('Network error while loading submissions.');
+    } catch (err) {
+      setListError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Network error while loading submissions.',
+      );
     } finally {
       setIsLoadingList(false);
     }
@@ -125,8 +176,38 @@ export function DashboardCard({
     setIsSubmitting(true);
 
     try {
+      let activeUserId = userId.trim();
+      if (typeof supabase.auth?.getSession === 'function') {
+        const {data: sessionData, error: sessionError} =
+          await supabase.auth.getSession();
+        if (sessionError) {
+          setFormError(
+            formatSupabaseError(
+              sessionError,
+              'Unable to verify your active session. Please sign in again.',
+            ),
+          );
+          return;
+        }
+        const sessionUserId = sessionData?.session?.user?.id;
+        if (!sessionUserId) {
+          setFormError(
+            'Your session has expired. Please sign in again before submitting.',
+          );
+          return;
+        }
+        activeUserId = sessionUserId;
+      }
+
+      if (!activeUserId) {
+        setFormError(
+          'Unable to identify your signed-in account. Please sign in again.',
+        );
+        return;
+      }
+
       const payload = {
-        user_id: userId,
+        user_id: activeUserId,
         name: name.trim(),
         email: email.trim(),
         phone_number: phoneNumber.trim(),
@@ -141,8 +222,10 @@ export function DashboardCard({
 
       if (error || !data) {
         setFormError(
-          error?.message ||
+          formatSupabaseError(
+            error,
             'Unable to save submission. Ensure the contact_submissions table and RLS policies exist.',
+          ),
         );
         return;
       }
@@ -154,8 +237,12 @@ export function DashboardCard({
       setMessage('');
       setFormSuccess('Your form submission has been saved securely.');
       onNotify?.('Your message was saved to Supabase.', 'Submission saved');
-    } catch {
-      setFormError('Network error while saving submission.');
+    } catch (err) {
+      setFormError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Network error while saving submission.',
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -167,21 +254,47 @@ export function DashboardCard({
 
     setDeletingId(id);
     try {
+      let activeUserId = userId.trim();
+      if (typeof supabase.auth?.getSession === 'function') {
+        const {data: sessionData, error: sessionError} =
+          await supabase.auth.getSession();
+        if (sessionError) {
+          setListError(
+            formatSupabaseError(
+              sessionError,
+              'Unable to verify your active session.',
+            ),
+          );
+          return;
+        }
+        if (!sessionData?.session?.user?.id) {
+          setListError('Your session has expired. Please sign in again.');
+          return;
+        }
+        activeUserId = sessionData.session.user.id;
+      }
+
       const {error} = await supabase
         .from('contact_submissions')
         .delete()
         .eq('id', id)
-        .eq('user_id', userId);
+        .eq('user_id', activeUserId);
 
       if (error) {
-        setListError(error.message || 'Unable to delete submission.');
+        setListError(
+          formatSupabaseError(error, 'Unable to delete submission.'),
+        );
         return;
       }
 
       setSubmissions((prev) => prev.filter((item) => item.id !== id));
       onNotify?.('Submission deleted.', 'Deleted');
-    } catch {
-      setListError('Network error while deleting submission.');
+    } catch (err) {
+      setListError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Network error while deleting submission.',
+      );
     } finally {
       setDeletingId(null);
     }
