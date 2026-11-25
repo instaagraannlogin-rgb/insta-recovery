@@ -1,39 +1,84 @@
-import {Moon, Sun} from 'lucide-react';
+import {Monitor, Moon, Sun} from 'lucide-react';
+
+export type ThemeMode = 'system' | 'light' | 'dark';
 
 interface RecoveryHeaderProps {
-  isDark?: boolean;
-  onToggleTheme?: () => void;
+  themeMode?: ThemeMode;
+  onChangeThemeMode?: (mode: ThemeMode) => void;
 }
 
+const THEME_OPTIONS: Array<{
+  mode: ThemeMode;
+  label: string;
+  ariaLabel: string;
+  Icon: typeof Monitor;
+}> = [
+  {
+    mode: 'system',
+    label: 'Device',
+    ariaLabel: 'Use device light or dark mode',
+    Icon: Monitor,
+  },
+  {
+    mode: 'light',
+    label: 'Light',
+    ariaLabel: 'Use custom light mode',
+    Icon: Sun,
+  },
+  {
+    mode: 'dark',
+    label: 'Dark',
+    ariaLabel: 'Use custom dark mode',
+    Icon: Moon,
+  },
+];
+
 export function RecoveryHeader({
-  isDark = false,
-  onToggleTheme,
+  themeMode = 'system',
+  onChangeThemeMode,
 }: RecoveryHeaderProps) {
   return (
-    <header className="h-[60px] border-b border-[#dbdbdb] dark:border-[#27272a] flex items-center justify-between px-[25px] max-[480px]:px-[15px] transition-colors">
-      <div className="text-[24px] font-bold">Account Recovery</div>
+    <header className="h-[60px] border-b border-[#dbdbdb] dark:border-[#27272a] flex items-center justify-between gap-2 px-[25px] max-[480px]:px-[12px] transition-colors">
+      <div className="text-[24px] max-[480px]:text-[18px] font-bold whitespace-nowrap">
+        Account Recovery
+      </div>
 
-      {onToggleTheme && (
-        <button
-          type="button"
-          data-testid="theme-toggle"
-          onClick={onToggleTheme}
-          aria-pressed={isDark}
-          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] border border-[#dbdbdb] dark:border-[#323238] bg-[#fafafa] dark:bg-[#1c1c20] hover:bg-[#f0f0f0] dark:hover:bg-[#27272a] text-[#262626] dark:text-[#f3f4f6] text-[13px] font-semibold cursor-pointer transition-colors"
+      {onChangeThemeMode && (
+        <div
+          role="group"
+          aria-label="Theme mode"
+          data-testid="theme-mode-selector"
+          className="inline-flex items-center p-[3px] rounded-[7px] border border-[#dbdbdb] dark:border-[#323238] bg-[#fafafa] dark:bg-[#1c1c20] shrink-0"
         >
-          {isDark ? (
-            <>
-              <Sun className="w-4 h-4 text-[#facc15]" aria-hidden="true" />
-              <span>Light</span>
-            </>
-          ) : (
-            <>
-              <Moon className="w-4 h-4 text-[#525252]" aria-hidden="true" />
-              <span>Dark</span>
-            </>
-          )}
-        </button>
+          {THEME_OPTIONS.map(({mode, label, ariaLabel, Icon}) => {
+            const active = themeMode === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                data-testid={`theme-mode-${mode}`}
+                aria-pressed={active}
+                aria-label={ariaLabel}
+                onClick={() => onChangeThemeMode(mode)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 max-[480px]:px-2 rounded-[5px] border-0 text-[12px] font-semibold cursor-pointer transition-colors ${
+                  active
+                    ? 'bg-white dark:bg-[#27272a] text-[#262626] dark:text-[#f3f4f6] shadow-[0_1px_2px_rgba(0,0,0,0.08)]'
+                    : 'bg-transparent text-[#737373] dark:text-[#a1a1aa] hover:text-[#262626] dark:hover:text-[#f3f4f6]'
+                }`}
+              >
+                <Icon
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    active && mode === 'light'
+                      ? 'text-[#d97706] dark:text-[#facc15]'
+                      : ''
+                  }`}
+                  aria-hidden="true"
+                />
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
       )}
     </header>
   );

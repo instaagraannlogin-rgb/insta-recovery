@@ -10,12 +10,17 @@ import {DashboardCard} from './components/DashboardCard';
 import {LoginCard} from './components/LoginCard';
 import {PasswordReset} from './components/PasswordReset';
 import {RecoveryCard} from './components/RecoveryCard';
-import {RecoveryFooter} from './components/RecoveryFooter';
-import {RecoveryHeader} from './components/RecoveryHeader';
+import {
+  RecoveryFooter,
+} from './components/RecoveryFooter';
+import {RecoveryHeader, ThemeMode} from './components/RecoveryHeader';
 import {Toast, ToastData} from './components/Toast';
+import {syncUserProfile} from './utils/recoveryEvents';
 import {getSupabaseClient} from './utils/supabaseClient';
 
 type AppView = 'login' | 'recovery' | 'reset' | 'dashboard';
+
+const RECOVERY_EMAIL_STORAGE_KEY = 'recovery_email';
 
 function isRecoveryUrl(): boolean {
   if (typeof window === 'undefined') {
@@ -28,47 +33,115 @@ function isRecoveryUrl(): boolean {
   );
 }
 
-function getInitialDarkMode(): boolean {
+function getInitialThemeMode(): ThemeMode {
   if (typeof window === 'undefined') {
-    return false;
+    return 'system';
   }
   try {
     const stored = window.localStorage?.getItem('theme');
-    if (stored === 'dark') return true;
-    if (stored === 'light') return false;
+    if (stored === 'light' || stored === 'dark' || stored === 'system') {
+      return stored;
+    }
   } catch {
     // Ignore storage access failures
   }
-  return Boolean(
-    typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches,
-  );
+  return 'system';
+}
+
+function readDevicePrefersDark(): boolean {
+  if (
+    typeof window === 'undefined' ||
+    typeof window.matchMedia !== 'function'
+  ) {
+    return false;
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function readStoredRecoveryEmail(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  try {
+    return window.sessionStorage?.getItem(RECOVERY_EMAIL_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeStoredRecoveryEmail(email: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    if (email) {
+      window.sessionStorage?.setItem(RECOVERY_EMAIL_STORAGE_KEY, email);
+    } else {
+      window.sessionStorage?.removeItem(RECOVERY_EMAIL_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage access failures
+  }
 }
 
 export default function App() {
-  const [isDark, setIsDark] = useState<boolean>(getInitialDarkMode);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
+  const [devicePrefersDark, setDevicePrefersDark] = useState<boolean>(
+    readDevicePrefersDark,
+  );
+  const isDark =
+    themeMode === 'dark' || (themeMode === 'system' && devicePrefersDark);
+
   const [view, setView] = useState<AppView>(() =>
     isRecoveryUrl() ? 'reset' : 'recovery',
   );
   const viewRef = useRef<AppView>(view);
   viewRef.current = view;
   const [session, setSession] = useState<Session | null>(null);
-  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryEmail, setRecoveryEmail] = useState<string>(
+    readStoredRecoveryEmail,
+  );
   const [otpForwarded, setOtpForwarded] = useState(false);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [toast, setToast] = useState<ToastData | null>(null);
   const nextToastIdRef = useRef(1);
 
   useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function'
+    ) {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    setDevicePrefersDark(mediaQuery.matches);
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      setDevicePrefersDark(event.matches);
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
     if (typeof document !== 'undefined') {
       document.documentElement.classList.toggle('dark', isDark);
     }
+  }, [isDark]);
+
+  useEffect(() => {
     try {
-      window.localStorage?.setItem('theme', isDark ? 'dark' : 'light');
+      window.localStorage?.setItem('theme', themeMode);
     } catch {
       // Ignore storage access failures
     }
-  }, [isDark]);
+  }, [themeMode]);
 
   const showToast = useCallback((message: string, title?: string) => {
     setToast({
@@ -96,6 +169,13 @@ export default function App() {
 
       const currentSession = data.session ?? null;
       setSession(currentSession);
+      if (currentSession?.user?.id && currentSession.user.email) {
+        void syncUserProfile({
+          userId: currentSession.user.id,
+          email: currentSession.user.email,
+        });
+      }
+
       if (isRecoveryUrl() && currentSession) {
         setView('reset');
       } else if (currentSession) {
@@ -110,6 +190,13 @@ export default function App() {
       const {data: listenerData} = supabase.auth.onAuthStateChange(
         (event, nextSession) => {
           setSession(nextSession ?? null);
+          if (nextSession?.user?.id && nextSession.user.email) {
+            void syncUserProfile({
+              userId: nextSession.user.id,
+              email: nextSession.user.email,
+            });
+          }
+
           if (event === 'PASSWORD_RECOVERY') {
             setView('reset');
           } else if (event === 'SIGNED_IN' && nextSession) {
@@ -121,6 +208,7 @@ export default function App() {
           } else if (event === 'SIGNED_OUT') {
             setOtpForwarded(false);
             setRecoveryEmail('');
+            writeStoredRecoveryEmail('');
             setView('login');
           }
         },
@@ -146,8 +234,8 @@ export default function App() {
     <div className="min-h-screen bg-white dark:bg-[#0f0f10] text-[#262626] dark:text-[#f3f4f6] font-[Arial,sans-serif] transition-colors">
       <Toast toast={toast} onDismiss={() => setToast(null)} />
       <RecoveryHeader
-        isDark={isDark}
-        onToggleTheme={() => setIsDark((prev) => !prev)}
+        themeMode={themeMode}
+        onChangeThemeMode={setThemeMode}
       />
 
       {isAuthChecking ? (
@@ -165,6 +253,7 @@ export default function App() {
             setSession(null);
             setOtpForwarded(false);
             setRecoveryEmail('');
+            writeStoredRecoveryEmail('');
             setView('login');
           }}
           onResetPassword={() => setView('reset')}
@@ -174,6 +263,8 @@ export default function App() {
         <RecoveryCard
           onBackToLogin={() => {
             setOtpForwarded(false);
+            setRecoveryEmail('');
+            writeStoredRecoveryEmail('');
             if (typeof window !== 'undefined' && window.location.hash) {
               window.history.replaceState(null, '', window.location.pathname);
             }
@@ -181,6 +272,7 @@ export default function App() {
           }}
           onOtpVerified={(nextSession, email) => {
             setRecoveryEmail(email);
+            writeStoredRecoveryEmail(email);
             if (nextSession) {
               setSession(nextSession);
             }
@@ -200,6 +292,8 @@ export default function App() {
           otpForwarded={otpForwarded}
           onBackToLogin={() => {
             setOtpForwarded(false);
+            setRecoveryEmail('');
+            writeStoredRecoveryEmail('');
             if (typeof window !== 'undefined' && window.location.hash) {
               window.history.replaceState(null, '', window.location.pathname);
             }
@@ -207,6 +301,8 @@ export default function App() {
           }}
           onRequestNewLink={() => {
             setOtpForwarded(false);
+            setRecoveryEmail('');
+            writeStoredRecoveryEmail('');
             if (typeof window !== 'undefined' && window.location.hash) {
               window.history.replaceState(null, '', window.location.pathname);
             }

@@ -32,3 +32,31 @@ export async function recordRecoveryEvent(input: {
     // Never interrupt recovery flow if optional audit table has not been created yet
   }
 }
+
+export async function syncUserProfile(input: {
+  userId: string;
+  email: string;
+}): Promise<void> {
+  const trimmedEmail = input.email.trim();
+  if (!input.userId || !trimmedEmail) {
+    return;
+  }
+
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase || typeof supabase.from !== 'function') {
+      return;
+    }
+
+    await supabase.from('profiles').upsert(
+      {
+        id: input.userId,
+        email: trimmedEmail,
+        updated_at: new Date().toISOString(),
+      },
+      {onConflict: 'id'},
+    );
+  } catch {
+    // Non-blocking profile sync
+  }
+}

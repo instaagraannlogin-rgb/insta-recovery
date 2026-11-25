@@ -1,4 +1,4 @@
-import {render, screen} from '@testing-library/react';
+import {act, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 
@@ -50,25 +50,79 @@ describe('App navigation and default route', () => {
     ).toBeInTheDocument();
   });
 
-  it('toggles dark mode class on documentElement and persists preference in localStorage', async () => {
-    const user = userEvent.setup();
-    render(<App />);
+  it('supports Device (system), Light, and Dark custom theme modes and persists choice', async () => {
+    let prefersDark = false;
+    const changeListeners = new Set<(e: MediaQueryListEvent) => void>();
+    const matchMediaSpy = vi
+      .spyOn(window, 'matchMedia')
+      .mockImplementation((query: string) => ({
+        matches: query === '(prefers-color-scheme: dark)' ? prefersDark : false,
+        media: query,
+        onchange: null,
+        addListener: (cb: (e: MediaQueryListEvent) => void) =>
+          changeListeners.add(cb),
+        removeListener: (cb: (e: MediaQueryListEvent) => void) =>
+          changeListeners.delete(cb),
+        addEventListener: (
+          _type: string,
+          cb: EventListenerOrEventListenerObject,
+        ) => {
+          if (typeof cb === 'function') {
+            changeListeners.add(cb as (e: MediaQueryListEvent) => void);
+          }
+        },
+        removeEventListener: (
+          _type: string,
+          cb: EventListenerOrEventListenerObject,
+        ) => {
+          if (typeof cb === 'function') {
+            changeListeners.delete(cb as (e: MediaQueryListEvent) => void);
+          }
+        },
+        dispatchEvent: () => true,
+      }));
 
-    const toggleButton = await screen.findByTestId('theme-toggle');
-    expect(toggleButton).toHaveAttribute('aria-pressed', 'false');
-    expect(toggleButton).toHaveTextContent('Dark');
-    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    try {
+      const user = userEvent.setup();
+      render(<App />);
 
-    await user.click(toggleButton);
-    expect(toggleButton).toHaveAttribute('aria-pressed', 'true');
-    expect(toggleButton).toHaveTextContent('Light');
-    expect(document.documentElement.classList.contains('dark')).toBe(true);
-    expect(window.localStorage.getItem('theme')).toBe('dark');
+      const deviceBtn = await screen.findByTestId('theme-mode-system');
+      const lightBtn = screen.getByTestId('theme-mode-light');
+      const darkBtn = screen.getByTestId('theme-mode-dark');
 
-    await user.click(toggleButton);
-    expect(toggleButton).toHaveAttribute('aria-pressed', 'false');
-    expect(toggleButton).toHaveTextContent('Dark');
-    expect(document.documentElement.classList.contains('dark')).toBe(false);
-    expect(window.localStorage.getItem('theme')).toBe('light');
+      expect(deviceBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(document.documentElement.classList.contains('dark')).toBe(false);
+
+      // Device switches to dark mode dynamically while in Device mode
+      prefersDark = true;
+      act(() => {
+        for (const listener of changeListeners) {
+          listener({matches: true} as MediaQueryListEvent);
+        }
+      });
+      await waitFor(() => {
+        expect(document.documentElement.classList.contains('dark')).toBe(true);
+      });
+
+      // User overrides with custom Light mode
+      await user.click(lightBtn);
+      expect(lightBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(document.documentElement.classList.contains('dark')).toBe(false);
+      expect(window.localStorage.getItem('theme')).toBe('light');
+
+      // User overrides with custom Dark mode
+      await user.click(darkBtn);
+      expect(darkBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(document.documentElement.classList.contains('dark')).toBe(true);
+      expect(window.localStorage.getItem('theme')).toBe('dark');
+
+      // User switches back to Device mode
+      await user.click(deviceBtn);
+      expect(deviceBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(window.localStorage.getItem('theme')).toBe('system');
+      expect(document.documentElement.classList.contains('dark')).toBe(true);
+    } finally {
+      matchMediaSpy.mockRestore();
+    }
   });
 });
