@@ -1,4 +1,4 @@
-import {Monitor, Moon, Sun} from 'lucide-react';
+import {Moon, Sun} from 'lucide-react';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
@@ -11,14 +11,8 @@ const THEME_OPTIONS: Array<{
   mode: ThemeMode;
   label: string;
   ariaLabel: string;
-  Icon: typeof Monitor;
+  Icon: typeof Sun;
 }> = [
-  {
-    mode: 'system',
-    label: 'Device',
-    ariaLabel: 'Use device light or dark mode',
-    Icon: Monitor,
-  },
   {
     mode: 'light',
     label: 'Light',

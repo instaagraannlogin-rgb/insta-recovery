@@ -144,4 +144,36 @@ describe('DashboardCard', () => {
       await screen.findByText('Please send my invoice receipt.'),
     ).toBeInTheDocument();
   });
+
+  it('surfaces Supabase insert errors and does not ignore database failures', async () => {
+    const user = userEvent.setup();
+    singleMock.mockResolvedValueOnce({
+      data: null,
+      error: {message: 'new row violates row-level security policy'},
+    });
+
+    render(
+      <DashboardCard
+        userId="user-123"
+        userEmail="alex@example.com"
+        onLoggedOut={vi.fn()}
+        onResetPassword={vi.fn()}
+      />,
+    );
+
+    await screen.findByText(/No submissions yet/i);
+    await user.type(screen.getByLabelText('Full name'), 'Alex Morgan');
+    await user.type(
+      screen.getByLabelText('Message'),
+      'Testing database error visibility.',
+    );
+    await user.click(screen.getByRole('button', {name: 'Submit Form'}));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'new row violates row-level security policy',
+    );
+    expect(
+      screen.queryByText(/Your form submission has been saved securely/i),
+    ).not.toBeInTheDocument();
+  });
 });

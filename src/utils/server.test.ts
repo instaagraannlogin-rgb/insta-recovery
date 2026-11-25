@@ -31,12 +31,16 @@ test('resolvePublicSupabaseConfig normalizes HTTPS URLs and never reads service 
     'SUPABASE_PUBLISHABLE_KEY',
     'SUPABASE_ANON_KEY',
     'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_SECRET_KEY',
+    'SUPABASE_JWKS_URL',
   ] as const;
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
 
   try {
     for (const k of keys) delete process.env[k];
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'secret_service_role_must_be_ignored';
+    process.env.SUPABASE_SECRET_KEY = 'secret_key_must_be_ignored';
+    process.env.SUPABASE_JWKS_URL = 'https://example-proj.supabase.co/auth/v1/.well-known/jwks.json';
     assert.equal(resolvePublicSupabaseConfig(), null);
 
     process.env.VITE_SUPABASE_URL = 'https://example-proj.supabase.co/';

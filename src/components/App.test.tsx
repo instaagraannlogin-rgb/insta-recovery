@@ -86,14 +86,13 @@ describe('App navigation and default route', () => {
       const user = userEvent.setup();
       render(<App />);
 
-      const deviceBtn = await screen.findByTestId('theme-mode-system');
-      const lightBtn = screen.getByTestId('theme-mode-light');
+      const lightBtn = await screen.findByTestId('theme-mode-light');
       const darkBtn = screen.getByTestId('theme-mode-dark');
 
-      expect(deviceBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.queryByTestId('theme-mode-system')).not.toBeInTheDocument();
       expect(document.documentElement.classList.contains('dark')).toBe(false);
 
-      // Device switches to dark mode dynamically while in Device mode
+      // Device switches to dark mode dynamically while no custom override is selected
       prefersDark = true;
       act(() => {
         for (const listener of changeListeners) {
@@ -115,12 +114,6 @@ describe('App navigation and default route', () => {
       expect(darkBtn).toHaveAttribute('aria-pressed', 'true');
       expect(document.documentElement.classList.contains('dark')).toBe(true);
       expect(window.localStorage.getItem('theme')).toBe('dark');
-
-      // User switches back to Device mode
-      await user.click(deviceBtn);
-      expect(deviceBtn).toHaveAttribute('aria-pressed', 'true');
-      expect(window.localStorage.getItem('theme')).toBe('system');
-      expect(document.documentElement.classList.contains('dark')).toBe(true);
     } finally {
       matchMediaSpy.mockRestore();
     }

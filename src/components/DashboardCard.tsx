@@ -139,17 +139,15 @@ export function DashboardCard({
         .select('id, user_id, name, email, phone_number, message, created_at')
         .single();
 
-      if (error) {
+      if (error || !data) {
         setFormError(
-          error.message ||
+          error?.message ||
             'Unable to save submission. Ensure the contact_submissions table and RLS policies exist.',
         );
         return;
       }
 
-      if (data) {
-        setSubmissions((prev) => [data as ContactSubmissionRecord, ...prev]);
-      }
+      setSubmissions((prev) => [data as ContactSubmissionRecord, ...prev]);
 
       setName('');
       setPhoneNumber('');
