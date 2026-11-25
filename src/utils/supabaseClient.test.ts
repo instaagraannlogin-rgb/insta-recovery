@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  SUPABASE_NOT_CONFIGURED_ERROR,
   clearDisconnectedProjectAuthStorage,
   extractSupabaseProjectId,
+  getConnectedSupabaseProject,
+  getSupabaseClient,
+  getSupabaseInitError,
+  resetSupabaseClientForTests,
 } from './supabaseClient';
 
 test('extractSupabaseProjectId extracts project ref from HTTPS Supabase URLs', () => {
@@ -52,4 +57,59 @@ test('clearDisconnectedProjectAuthStorage removes stale auth keys for other Supa
   ]);
   assert.equal(store.has('sb-fdedubvppattvgdqiceu-auth-token'), true);
   assert.equal(store.has('theme'), true);
+});
+
+test('getSupabaseClient initializes from /api/supabase-config and tracks project info cleanly', async () => {
+  const originalFetch = globalThis.fetch;
+  resetSupabaseClientForTests();
+
+  try {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          configured: true,
+          url: 'https://fdedubvppattvgdqiceu.supabase.co',
+          publishableKey: 'sb_publishable_test_key',
+        }),
+        {status: 200, headers: {'Content-Type': 'application/json'}},
+      )) as typeof fetch;
+
+    const client = await getSupabaseClient();
+    assert.ok(client);
+    assert.equal(getSupabaseInitError(), null);
+    assert.deepEqual(getConnectedSupabaseProject(), {
+      url: 'https://fdedubvppattvgdqiceu.supabase.co',
+      projectId: 'fdedubvppattvgdqiceu',
+    });
+  } finally {
+    resetSupabaseClientForTests();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('getSupabaseClient records SUPABASE_NOT_CONFIGURED_ERROR when /api/supabase-config is unconfigured and no build-time env exists', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConsoleWarn = console.warn;
+  const originalConsoleError = console.error;
+  resetSupabaseClientForTests();
+
+  try {
+    console.warn = () => {};
+    console.error = () => {};
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({configured: false, url: null, publishableKey: null}),
+        {status: 200, headers: {'Content-Type': 'application/json'}},
+      )) as typeof fetch;
+
+    const client = await getSupabaseClient();
+    assert.equal(client, null);
+    assert.equal(getSupabaseInitError(), SUPABASE_NOT_CONFIGURED_ERROR);
+    assert.equal(getConnectedSupabaseProject(), null);
+  } finally {
+    resetSupabaseClientForTests();
+    globalThis.fetch = originalFetch;
+    console.warn = originalConsoleWarn;
+    console.error = originalConsoleError;
+  }
 });

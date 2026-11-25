@@ -10,9 +10,9 @@ vi.mock('../utils/supabaseClient', () => ({
   getSupabaseClient: getSupabaseClientMock,
 }));
 
-import {recordRecoveryEvent} from '../utils/recoveryEvents';
+import {recordRecoveryEvent, syncUserProfile} from '../utils/recoveryEvents';
 
-describe('recordRecoveryEvent', () => {
+describe('recordRecoveryEvent & syncUserProfile', () => {
   beforeEach(() => {
     fromMock.mockReset();
     insertMock.mockReset();
@@ -62,5 +62,32 @@ describe('recordRecoveryEvent', () => {
       eventType: 'password_changed',
     });
     expect(throwResult).toEqual({ok: false, error: 'relation does not exist'});
+  });
+
+  it('inserts missing profile row when update affects 0 rows and reports insert errors', async () => {
+    const selectMock = vi.fn().mockResolvedValue({data: [], error: null});
+    const eqMock = vi.fn(() => ({select: selectMock}));
+    const updateMock = vi.fn(() => ({eq: eqMock}));
+    fromMock.mockReturnValue({update: updateMock, insert: insertMock});
+    insertMock.mockResolvedValueOnce({error: null});
+
+    const okResult = await syncUserProfile({
+      userId: 'user-123',
+      email: 'alex@example.com',
+    });
+    expect(okResult).toEqual({ok: true});
+    expect(fromMock).toHaveBeenCalledWith('profiles');
+
+    insertMock.mockResolvedValueOnce({
+      error: {code: '42501', message: 'permission denied for table profiles'},
+    });
+    const errResult = await syncUserProfile({
+      userId: 'user-123',
+      email: 'alex@example.com',
+    });
+    expect(errResult).toEqual({
+      ok: false,
+      error: '[42501] — permission denied for table profiles',
+    });
   });
 });

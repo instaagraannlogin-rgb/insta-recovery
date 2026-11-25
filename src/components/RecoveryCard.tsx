@@ -96,18 +96,35 @@ export function RecoveryCard({
             typeof window !== 'undefined'
               ? `${window.location.origin}/#reset-password`
               : undefined;
-          await supabase.auth.resetPasswordForEmail(trimmedEmail, {
-            redirectTo,
-          });
-        } catch {
+          const {error: resetError} =
+            await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+              redirectTo,
+            });
+          if (resetError) {
+            console.warn(
+              '[supabase] resetPasswordForEmail warning:',
+              resetError.message,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            '[supabase] resetPasswordForEmail exception:',
+            err instanceof Error ? err.message : 'Request failed',
+          );
           // Proceed to the 8-digit verification step even if rate-limited in preview
         }
       }
 
-      await recordRecoveryEvent({
+      const eventResult = await recordRecoveryEvent({
         email: trimmedEmail,
         eventType: 'recovery_requested',
       });
+      if (!eventResult.ok && eventResult.error) {
+        console.warn(
+          '[supabase] recovery_requested event not logged:',
+          eventResult.error,
+        );
+      }
 
       setSubmittedEmail(trimmedEmail);
       setOtp('');
@@ -140,22 +157,35 @@ export function RecoveryCard({
       const supabase = await getSupabaseClient();
       if (supabase) {
         try {
-          const {data} = await supabase.auth.verifyOtp({
+          const {data, error: otpErr} = await supabase.auth.verifyOtp({
             email: submittedEmail,
             token: otp,
             type: 'recovery',
           });
-          verifiedSession = data.session ?? null;
-        } catch {
+          if (otpErr) {
+            console.warn('[supabase] verifyOtp warning:', otpErr.message);
+          }
+          verifiedSession = data?.session ?? null;
+        } catch (err) {
+          console.warn(
+            '[supabase] verifyOtp exception:',
+            err instanceof Error ? err.message : 'Verification failed',
+          );
           verifiedSession = null;
         }
       }
 
-      await recordRecoveryEvent({
+      const eventResult = await recordRecoveryEvent({
         email: submittedEmail,
         eventType: 'otp_verified',
         userId: verifiedSession?.user?.id ?? null,
       });
+      if (!eventResult.ok && eventResult.error) {
+        console.warn(
+          '[supabase] otp_verified event not logged:',
+          eventResult.error,
+        );
+      }
 
       setOtp('');
       onNotify?.(

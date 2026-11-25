@@ -4,6 +4,7 @@ let cachedClient: SupabaseClient | null = null;
 let cachedConfigKey: string | null = null;
 let cachedProjectInfo: {url: string; projectId: string | null} | null = null;
 let initPromise: Promise<SupabaseClient | null> | null = null;
+let lastInitError: string | null = null;
 
 export function extractSupabaseProjectId(url: string): string | null {
   try {
@@ -54,8 +55,11 @@ export function clearDisconnectedProjectAuthStorage(
         removedKeys.push(key);
       }
     }
-  } catch {
-    // Ignore storage access errors
+  } catch (err) {
+    console.warn(
+      '[supabase] Could not clear disconnected project auth storage:',
+      err instanceof Error ? err.message : 'Storage unavailable',
+    );
   }
 
   return removedKeys;
@@ -83,29 +87,47 @@ function readBuildTimeConfig(): {url: string; publishableKey: string} | null {
 function createOrReuseClient(config: {
   url: string;
   publishableKey: string;
-}): SupabaseClient {
+}): SupabaseClient | null {
   const normalizedUrl = config.url.trim().replace(/\/+$/, '');
   const normalizedKey = config.publishableKey.trim();
-  const nextConfigKey = `${normalizedUrl}|${normalizedKey}`;
 
+  if (!normalizedUrl.startsWith('https://') || !normalizedKey) {
+    lastInitError = SUPABASE_NOT_CONFIGURED_ERROR;
+    console.error('[supabase] Invalid Supabase URL or publishable key.');
+    return null;
+  }
+
+  const nextConfigKey = `${normalizedUrl}|${normalizedKey}`;
   if (cachedClient && cachedConfigKey === nextConfigKey) {
     return cachedClient;
   }
 
-  clearDisconnectedProjectAuthStorage(normalizedUrl);
-  cachedConfigKey = nextConfigKey;
-  cachedProjectInfo = {
-    url: normalizedUrl,
-    projectId: extractSupabaseProjectId(normalizedUrl),
-  };
-  cachedClient = createClient(normalizedUrl, normalizedKey, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-  });
-  return cachedClient;
+  try {
+    clearDisconnectedProjectAuthStorage(normalizedUrl);
+    const projectId = extractSupabaseProjectId(normalizedUrl);
+    const client = createClient(normalizedUrl, normalizedKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    });
+    cachedConfigKey = nextConfigKey;
+    cachedProjectInfo = {
+      url: normalizedUrl,
+      projectId,
+    };
+    cachedClient = client;
+    lastInitError = null;
+    return cachedClient;
+  } catch (err) {
+    lastInitError =
+      err instanceof Error
+        ? err.message
+        : 'Failed to initialize Supabase client.';
+    console.error('[supabase] Client initialization error:', lastInitError);
+    return null;
+  }
 }
 
 export function getConnectedSupabaseProject(): {
@@ -115,9 +137,24 @@ export function getConnectedSupabaseProject(): {
   return cachedProjectInfo;
 }
 
+export function getSupabaseInitError(): string | null {
+  return lastInitError;
+}
+
+export function resetSupabaseClientForTests(): void {
+  cachedClient = null;
+  cachedConfigKey = null;
+  cachedProjectInfo = null;
+  initPromise = null;
+  lastInitError = null;
+}
+
 export function getSyncSupabaseClient(): SupabaseClient | null {
   const config = readBuildTimeConfig();
   if (!config) {
+    if (!cachedClient && !lastInitError) {
+      lastInitError = SUPABASE_NOT_CONFIGURED_ERROR;
+    }
     return cachedClient;
   }
 
@@ -138,6 +175,7 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
       const response = await fetch('/api/supabase-config');
       if (response.ok) {
         const data = (await response.json()) as {
+          configured?: boolean;
           url?: unknown;
           publishableKey?: unknown;
         };
@@ -152,14 +190,31 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
             publishableKey: data.publishableKey,
           });
         }
+        if (data.configured === false) {
+          console.warn(
+            '[supabase] /api/supabase-config returned configured: false; checking build-time Vite config fallback.',
+          );
+        }
+      } else {
+        console.warn(
+          `[supabase] /api/supabase-config returned HTTP ${response.status}; checking build-time Vite config fallback.`,
+        );
       }
-    } catch {
-      // Fall back to build-time Vite env if /api/supabase-config is unreachable
+    } catch (err) {
+      console.warn(
+        '[supabase] Could not reach /api/supabase-config; checking build-time Vite config fallback:',
+        err instanceof Error ? err.message : 'Fetch error',
+      );
     } finally {
       initPromise = null;
     }
 
-    return getSyncSupabaseClient();
+    const fallbackClient = getSyncSupabaseClient();
+    if (!fallbackClient) {
+      lastInitError = SUPABASE_NOT_CONFIGURED_ERROR;
+      console.error('[supabase]', SUPABASE_NOT_CONFIGURED_ERROR);
+    }
+    return fallbackClient;
   })();
 
   return initPromise;

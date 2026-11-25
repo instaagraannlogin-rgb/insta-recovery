@@ -127,10 +127,15 @@ export function PasswordReset({
     setIsResetting(true);
 
     try {
+      let activeEmail = accountEmail;
+      let activeUserId = accountUserId;
+
       const supabase = await getSupabaseClient();
       if (supabase) {
         const {data: sessionData} = await supabase.auth.getSession();
         if (sessionData.session) {
+          activeEmail = sessionData.session.user?.email || activeEmail;
+          activeUserId = sessionData.session.user?.id ?? activeUserId;
           const {error} = await supabase.auth.updateUser({
             password: newPassword,
           });
@@ -153,11 +158,11 @@ export function PasswordReset({
         }
       }
 
-      if (accountEmail) {
+      if (activeEmail) {
         await recordRecoveryEvent({
-          email: accountEmail,
+          email: activeEmail,
           eventType: 'password_changed',
-          userId: accountUserId,
+          userId: activeUserId,
         });
       }
 

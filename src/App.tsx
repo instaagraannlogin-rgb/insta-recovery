@@ -164,10 +164,17 @@ export default function App() {
         return;
       }
 
-      const {data} = await supabase.auth.getSession();
+      const {data, error: sessionError} = await supabase.auth.getSession();
       if (!active) return;
 
-      const currentSession = data.session ?? null;
+      if (sessionError) {
+        console.error(
+          '[supabase] Failed to restore auth session:',
+          sessionError.message,
+        );
+      }
+
+      const currentSession = data?.session ?? null;
       setSession(currentSession);
       if (currentSession?.user?.id && currentSession.user.email) {
         void syncUserProfile({
