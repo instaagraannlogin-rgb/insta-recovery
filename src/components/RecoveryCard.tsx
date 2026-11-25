@@ -11,6 +11,7 @@ import {
   processRecoverySubmission,
   validateOtpCode,
 } from '../utils/recovery';
+import {recordRecoveryEvent} from '../utils/recoveryEvents';
 import {getSupabaseClient} from '../utils/supabaseClient';
 
 interface RecoveryCardProps {
@@ -103,6 +104,11 @@ export function RecoveryCard({
         }
       }
 
+      await recordRecoveryEvent({
+        email: trimmedEmail,
+        eventType: 'recovery_requested',
+      });
+
       setSubmittedEmail(trimmedEmail);
       setOtp('');
       setOtpError('');
@@ -144,6 +150,12 @@ export function RecoveryCard({
           verifiedSession = null;
         }
       }
+
+      await recordRecoveryEvent({
+        email: submittedEmail,
+        eventType: 'otp_verified',
+        userId: verifiedSession?.user?.id ?? null,
+      });
 
       setOtp('');
       onNotify?.(
@@ -210,7 +222,7 @@ export function RecoveryCard({
     <main className="min-h-[80vh] flex justify-center items-start py-[60px] px-[20px] max-[480px]:py-[45px]">
       <div className="w-full max-w-[390px] max-[480px]:max-w-[350px] text-center">
         <div
-          className="w-[85px] h-[85px] border-2 border-[#262626] rounded-full mx-auto mb-[25px] flex justify-center items-center text-[38px]"
+          className="w-[85px] h-[85px] border-2 border-[#262626] dark:border-[#e4e4e7] rounded-full mx-auto mb-[25px] flex justify-center items-center text-[38px]"
           aria-hidden="true"
         >
           🔒
@@ -222,7 +234,7 @@ export function RecoveryCard({
               Forgot your password?
             </h2>
 
-            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
+            <p className="text-[14px] leading-[1.5] text-[#737373] dark:text-[#a1a1aa] mb-[25px]">
               Enter your email address and we&apos;ll send you an 8-digit
               verification code.
             </p>
@@ -258,17 +270,17 @@ export function RecoveryCard({
                     }
                   }}
                   required
-                  className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
+                  className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] dark:bg-[#1c1c20] text-[#262626] dark:text-[#f3f4f6] placeholder:text-[#737373] dark:placeholder:text-[#8e8e93] border rounded-[5px] text-[14px] outline-none ${
                     errorMessage
-                      ? 'border-[#ed4956] focus:border-[#ed4956]'
-                      : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                      ? 'border-[#ed4956] dark:border-[#f87171] focus:border-[#ed4956]'
+                      : 'border-[#dbdbdb] dark:border-[#323238] focus:border-[#a8a8a8] dark:focus:border-[#52525b]'
                   }`}
                 />
                 <User
                   className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
                     errorMessage
-                      ? 'text-[#ed4956]'
-                      : 'text-[#737373] peer-focus:text-[#262626]'
+                      ? 'text-[#ed4956] dark:text-[#f87171]'
+                      : 'text-[#737373] dark:text-[#a1a1aa] peer-focus:text-[#262626] dark:peer-focus:text-[#f3f4f6]'
                   }`}
                   aria-hidden="true"
                 />
@@ -280,7 +292,7 @@ export function RecoveryCard({
                     <p
                       id="account-error"
                       role="alert"
-                      className="text-[#ed4956] text-[13px] text-left"
+                      className="text-[#ed4956] dark:text-[#f87171] text-[13px] text-left"
                     >
                       {errorMessage}
                     </p>
@@ -294,8 +306,8 @@ export function RecoveryCard({
                       aria-live="polite"
                       className={`text-[12px] tabular-nums whitespace-nowrap ${
                         charStatus.isAtLimit
-                          ? 'text-[#ed4956] font-bold'
-                          : 'text-[#b45309]'
+                          ? 'text-[#ed4956] dark:text-[#f87171] font-bold'
+                          : 'text-[#b45309] dark:text-[#fbbf24]'
                       }`}
                     >
                       {charStatus.count}/{charStatus.max}
@@ -308,7 +320,7 @@ export function RecoveryCard({
                 type="submit"
                 disabled={isSubmitting}
                 aria-busy={isSubmitting}
-                className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors"
+                className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] dark:disabled:bg-[#0095f6]/40 disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors"
               >
                 {isSubmitting ? (
                   <>
@@ -329,12 +341,12 @@ export function RecoveryCard({
             <h2 className="text-[22px] font-bold mb-[15px]">Check your email</h2>
 
             <div className="flex justify-center mb-[15px]" aria-hidden="true">
-              <CheckCircle2 className="w-10 h-10 text-[#16803c]" />
+              <CheckCircle2 className="w-10 h-10 text-[#16803c] dark:text-[#4ade80]" />
             </div>
 
-            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[20px]">
+            <p className="text-[14px] leading-[1.5] text-[#737373] dark:text-[#a1a1aa] mb-[20px]">
               {LINK_SENT_MESSAGE} Enter the 8-digit code sent to{' '}
-              <span className="font-semibold text-[#262626]">
+              <span className="font-semibold text-[#262626] dark:text-[#f3f4f6]">
                 {submittedEmail}
               </span>
               .
@@ -364,17 +376,17 @@ export function RecoveryCard({
                     if (otpError) setOtpError('');
                   }}
                   required
-                  className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[15px] tracking-[0.18em] tabular-nums outline-none ${
+                  className={`peer w-full py-[14px] pr-[14px] pl-[42px] bg-[#fafafa] dark:bg-[#1c1c20] text-[#262626] dark:text-[#f3f4f6] placeholder:text-[#737373] dark:placeholder:text-[#8e8e93] border rounded-[5px] text-[15px] tracking-[0.18em] tabular-nums outline-none ${
                     otpError
-                      ? 'border-[#ed4956] focus:border-[#ed4956]'
-                      : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                      ? 'border-[#ed4956] dark:border-[#f87171] focus:border-[#ed4956]'
+                      : 'border-[#dbdbdb] dark:border-[#323238] focus:border-[#a8a8a8] dark:focus:border-[#52525b]'
                   }`}
                 />
                 <KeyRound
                   className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
                     otpError
-                      ? 'text-[#ed4956]'
-                      : 'text-[#737373] peer-focus:text-[#262626]'
+                      ? 'text-[#ed4956] dark:text-[#f87171]'
+                      : 'text-[#737373] dark:text-[#a1a1aa] peer-focus:text-[#262626] dark:peer-focus:text-[#f3f4f6]'
                   }`}
                   aria-hidden="true"
                 />
@@ -385,7 +397,7 @@ export function RecoveryCard({
                   <p
                     id="otp-error"
                     role="alert"
-                    className="text-[#ed4956] text-[13px] text-left"
+                    className="text-[#ed4956] dark:text-[#f87171] text-[13px] text-left"
                   >
                     {otpError}
                   </p>
@@ -394,7 +406,7 @@ export function RecoveryCard({
                 )}
                 <span
                   id="otp-counter"
-                  className="text-[12px] text-[#737373] tabular-nums whitespace-nowrap"
+                  className="text-[12px] text-[#737373] dark:text-[#a1a1aa] tabular-nums whitespace-nowrap"
                 >
                   {otp.length}/{OTP_LENGTH} digits
                 </span>
@@ -404,7 +416,7 @@ export function RecoveryCard({
                 type="submit"
                 disabled={isVerifying}
                 aria-busy={isVerifying}
-                className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors mb-[14px]"
+                className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] dark:disabled:bg-[#0095f6]/40 disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors mb-[14px]"
               >
                 {isVerifying ? (
                   <>
@@ -429,7 +441,10 @@ export function RecoveryCard({
               >
                 {isResending ? 'Resending...' : 'Resend code'}
               </button>
-              <span className="text-[#dbdbdb]" aria-hidden="true">
+              <span
+                className="text-[#dbdbdb] dark:text-[#3f3f46]"
+                aria-hidden="true"
+              >
                 |
               </span>
               <button
@@ -449,7 +464,7 @@ export function RecoveryCard({
             e.preventDefault();
             onBackToLogin?.();
           }}
-          className="inline-block mt-[30px] text-[#262626] no-underline text-[14px] font-bold hover:underline"
+          className="inline-block mt-[30px] text-[#262626] dark:text-[#f3f4f6] no-underline text-[14px] font-bold hover:underline"
         >
           Back to login
         </a>

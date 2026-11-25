@@ -66,19 +66,19 @@ export function Toast({toast, onDismiss}: ToastProps) {
       role="status"
       aria-live="polite"
       data-testid="toast-notification"
-      className="fixed top-[72px] right-5 z-50 w-[calc(100vw-2rem)] max-w-[380px] max-[480px]:top-auto max-[480px]:bottom-6 max-[480px]:left-4 max-[480px]:right-4 max-[480px]:w-auto bg-white border border-[#dbdbdb] border-l-4 border-l-[#16803c] rounded-[8px] shadow-[0_8px_24px_rgba(0,0,0,0.12)] px-4 py-3.5 flex items-start gap-3 text-left"
+      className="fixed top-[72px] right-5 z-50 w-[calc(100vw-2rem)] max-w-[380px] max-[480px]:top-auto max-[480px]:bottom-6 max-[480px]:left-4 max-[480px]:right-4 max-[480px]:w-auto bg-white dark:bg-[#18181b] border border-[#dbdbdb] dark:border-[#27272a] border-l-4 border-l-[#16803c] dark:border-l-[#4ade80] rounded-[8px] shadow-[0_8px_24px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.45)] px-4 py-3.5 flex items-start gap-3 text-left"
     >
       <CheckCircle2
-        className="w-5 h-5 text-[#16803c] shrink-0 mt-0.5"
+        className="w-5 h-5 text-[#16803c] dark:text-[#4ade80] shrink-0 mt-0.5"
         aria-hidden="true"
       />
       <div className="flex-1 min-w-0">
         {toast.title && (
-          <p className="text-[13px] font-bold text-[#262626] leading-[1.3] mb-0.5">
+          <p className="text-[13px] font-bold text-[#262626] dark:text-[#f3f4f6] leading-[1.3] mb-0.5">
             {toast.title}
           </p>
         )}
-        <p className="text-[13px] text-[#525252] leading-[1.4]">
+        <p className="text-[13px] text-[#525252] dark:text-[#d4d4d8] leading-[1.4]">
           {toast.message}
         </p>
       </div>
@@ -86,7 +86,7 @@ export function Toast({toast, onDismiss}: ToastProps) {
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss notification"
-        className="text-[#737373] hover:text-[#262626] p-0.5 bg-transparent border-0 cursor-pointer shrink-0 transition-colors"
+        className="text-[#737373] dark:text-[#a1a1aa] hover:text-[#262626] dark:hover:text-[#f3f4f6] p-0.5 bg-transparent border-0 cursor-pointer shrink-0 transition-colors"
       >
         <X className="w-4 h-4" aria-hidden="true" />
       </button>

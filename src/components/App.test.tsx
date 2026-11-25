@@ -22,6 +22,8 @@ import App from '../App';
 describe('App navigation and default route', () => {
   beforeEach(() => {
     window.history.replaceState(null, '', '/');
+    window.localStorage.clear();
+    document.documentElement.classList.remove('dark');
     getSessionMock.mockReset();
     onAuthStateChangeMock.mockReset();
     getSessionMock.mockResolvedValue({data: {session: null}});
@@ -46,5 +48,27 @@ describe('App navigation and default route', () => {
     expect(
       screen.getByRole('heading', {name: 'Forgot your password?'}),
     ).toBeInTheDocument();
+  });
+
+  it('toggles dark mode class on documentElement and persists preference in localStorage', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const toggleButton = await screen.findByTestId('theme-toggle');
+    expect(toggleButton).toHaveAttribute('aria-pressed', 'false');
+    expect(toggleButton).toHaveTextContent('Dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+
+    await user.click(toggleButton);
+    expect(toggleButton).toHaveAttribute('aria-pressed', 'true');
+    expect(toggleButton).toHaveTextContent('Light');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(window.localStorage.getItem('theme')).toBe('dark');
+
+    await user.click(toggleButton);
+    expect(toggleButton).toHaveAttribute('aria-pressed', 'false');
+    expect(toggleButton).toHaveTextContent('Dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    expect(window.localStorage.getItem('theme')).toBe('light');
   });
 });

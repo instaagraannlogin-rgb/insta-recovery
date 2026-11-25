@@ -14,10 +14,12 @@ import {
   mapSupabaseAuthError,
   validatePasswordResetInput,
 } from '../utils/recovery';
+import {recordRecoveryEvent} from '../utils/recoveryEvents';
 import {getSupabaseClient} from '../utils/supabaseClient';
 
 interface PasswordResetProps {
   accountEmail?: string;
+  accountUserId?: string | null;
   hasRecoverySession: boolean;
   otpForwarded?: boolean;
   onBackToLogin?: () => void;
@@ -26,15 +28,31 @@ interface PasswordResetProps {
 }
 
 const STRENGTH_COLOR_MAP = {
-  0: {bar: 'bg-[#e5e7eb]', text: 'text-[#737373]'},
-  1: {bar: 'bg-[#ed4956]', text: 'text-[#ed4956]'},
-  2: {bar: 'bg-[#d97706]', text: 'text-[#d97706]'},
-  3: {bar: 'bg-[#0095f6]', text: 'text-[#0095f6]'},
-  4: {bar: 'bg-[#16803c]', text: 'text-[#16803c]'},
+  0: {
+    bar: 'bg-[#e5e7eb] dark:bg-[#2e2e33]',
+    text: 'text-[#737373] dark:text-[#a1a1aa]',
+  },
+  1: {
+    bar: 'bg-[#ed4956] dark:bg-[#f87171]',
+    text: 'text-[#ed4956] dark:text-[#f87171]',
+  },
+  2: {
+    bar: 'bg-[#d97706] dark:bg-[#fbbf24]',
+    text: 'text-[#d97706] dark:text-[#fbbf24]',
+  },
+  3: {
+    bar: 'bg-[#0095f6] dark:bg-[#38bdf8]',
+    text: 'text-[#0095f6] dark:text-[#38bdf8]',
+  },
+  4: {
+    bar: 'bg-[#16803c] dark:bg-[#4ade80]',
+    text: 'text-[#16803c] dark:text-[#4ade80]',
+  },
 } as const;
 
 export function PasswordReset({
   accountEmail,
+  accountUserId = null,
   hasRecoverySession,
   otpForwarded = false,
   onBackToLogin,
@@ -135,6 +153,14 @@ export function PasswordReset({
         }
       }
 
+      if (accountEmail) {
+        await recordRecoveryEvent({
+          email: accountEmail,
+          eventType: 'password_changed',
+          userId: accountUserId,
+        });
+      }
+
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -151,7 +177,7 @@ export function PasswordReset({
     <main className="min-h-[80vh] flex justify-center items-start py-[60px] px-[20px] max-[480px]:py-[45px]">
       <div className="w-full max-w-[390px] max-[480px]:max-w-[350px] text-center">
         <div
-          className="w-[85px] h-[85px] border-2 border-[#262626] rounded-full mx-auto mb-[25px] flex justify-center items-center text-[38px]"
+          className="w-[85px] h-[85px] border-2 border-[#262626] dark:border-[#e4e4e7] rounded-full mx-auto mb-[25px] flex justify-center items-center text-[38px]"
           aria-hidden="true"
         >
           🔒
@@ -164,16 +190,16 @@ export function PasswordReset({
             </h2>
 
             <div className="flex justify-center mb-[15px]" aria-hidden="true">
-              <CheckCircle2 className="w-10 h-10 text-[#16803c]" />
+              <CheckCircle2 className="w-10 h-10 text-[#16803c] dark:text-[#4ade80]" />
             </div>
 
-            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
+            <p className="text-[14px] leading-[1.5] text-[#737373] dark:text-[#a1a1aa] mb-[25px]">
               Your password
               {accountEmail ? (
                 <>
                   {' '}
                   for{' '}
-                  <span className="font-semibold text-[#262626]">
+                  <span className="font-semibold text-[#262626] dark:text-[#f3f4f6]">
                     {accountEmail}
                   </span>
                 </>
@@ -185,7 +211,7 @@ export function PasswordReset({
               key="return-to-login-btn"
               type="button"
               onClick={() => onBackToLogin?.()}
-              className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer"
+              className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer transition-colors"
             >
               {hasRecoverySession ? 'Continue to dashboard' : 'Back to login'}
             </button>
@@ -196,7 +222,7 @@ export function PasswordReset({
               Reset link required
             </h2>
 
-            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
+            <p className="text-[14px] leading-[1.5] text-[#737373] dark:text-[#a1a1aa] mb-[25px]">
               Open the password reset link sent to your email address, or
               request a new link to reset your password securely.
             </p>
@@ -214,7 +240,7 @@ export function PasswordReset({
             <button
               type="button"
               onClick={() => onBackToLogin?.()}
-              className="text-[#262626] bg-transparent border-0 text-[14px] font-bold cursor-pointer hover:underline"
+              className="text-[#262626] dark:text-[#f3f4f6] bg-transparent border-0 text-[14px] font-bold cursor-pointer hover:underline"
             >
               Back to login
             </button>
@@ -225,11 +251,11 @@ export function PasswordReset({
               Set a new password
             </h2>
 
-            <p className="text-[14px] leading-[1.5] text-[#737373] mb-[25px]">
+            <p className="text-[14px] leading-[1.5] text-[#737373] dark:text-[#a1a1aa] mb-[25px]">
               {accountEmail ? (
                 <>
                   Update the password for{' '}
-                  <span className="font-semibold text-[#262626]">
+                  <span className="font-semibold text-[#262626] dark:text-[#f3f4f6]">
                     {accountEmail}
                   </span>
                   .
@@ -265,17 +291,17 @@ export function PasswordReset({
                       if (serverError) setServerError('');
                     }}
                     required
-                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
+                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] dark:bg-[#1c1c20] text-[#262626] dark:text-[#f3f4f6] placeholder:text-[#737373] dark:placeholder:text-[#8e8e93] border rounded-[5px] text-[14px] outline-none ${
                       currentPasswordError
-                        ? 'border-[#ed4956] focus:border-[#ed4956]'
-                        : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                        ? 'border-[#ed4956] dark:border-[#f87171] focus:border-[#ed4956]'
+                        : 'border-[#dbdbdb] dark:border-[#323238] focus:border-[#a8a8a8] dark:focus:border-[#52525b]'
                     }`}
                   />
                   <Lock
-                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
+                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
                       currentPasswordError
-                        ? 'text-[#ed4956]'
-                        : 'text-[#737373] peer-focus:text-[#262626]'
+                        ? 'text-[#ed4956] dark:text-[#f87171]'
+                        : 'text-[#737373] dark:text-[#a1a1aa] peer-focus:text-[#262626] dark:peer-focus:text-[#f3f4f6]'
                     }`}
                     aria-hidden="true"
                   />
@@ -287,7 +313,7 @@ export function PasswordReset({
                         : 'Show current password'
                     }
                     onClick={() => setShowCurrentPassword((prev) => !prev)}
-                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#262626] p-1 cursor-pointer bg-transparent border-0"
+                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] dark:text-[#a1a1aa] hover:text-[#262626] dark:hover:text-[#f3f4f6] p-1 cursor-pointer bg-transparent border-0"
                   >
                     {showCurrentPassword ? (
                       <EyeOff className="w-[18px] h-[18px]" aria-hidden="true" />
@@ -301,7 +327,7 @@ export function PasswordReset({
                   <p
                     id="current-password-error"
                     role="alert"
-                    className="text-[#ed4956] text-[13px] text-left mb-[12px]"
+                    className="text-[#ed4956] dark:text-[#f87171] text-[13px] text-left mb-[12px]"
                   >
                     {currentPasswordError}
                   </p>
@@ -338,17 +364,17 @@ export function PasswordReset({
                       if (serverError) setServerError('');
                     }}
                     required
-                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
+                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] dark:bg-[#1c1c20] text-[#262626] dark:text-[#f3f4f6] placeholder:text-[#737373] dark:placeholder:text-[#8e8e93] border rounded-[5px] text-[14px] outline-none ${
                       newPasswordError
-                        ? 'border-[#ed4956] focus:border-[#ed4956]'
-                        : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                        ? 'border-[#ed4956] dark:border-[#f87171] focus:border-[#ed4956]'
+                        : 'border-[#dbdbdb] dark:border-[#323238] focus:border-[#a8a8a8] dark:focus:border-[#52525b]'
                     }`}
                   />
                   <Lock
-                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
+                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
                       newPasswordError
-                        ? 'text-[#ed4956]'
-                        : 'text-[#737373] peer-focus:text-[#262626]'
+                        ? 'text-[#ed4956] dark:text-[#f87171]'
+                        : 'text-[#737373] dark:text-[#a1a1aa] peer-focus:text-[#262626] dark:peer-focus:text-[#f3f4f6]'
                     }`}
                     aria-hidden="true"
                   />
@@ -360,7 +386,7 @@ export function PasswordReset({
                         : 'Show new password'
                     }
                     onClick={() => setShowNewPassword((prev) => !prev)}
-                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#262626] p-1 cursor-pointer bg-transparent border-0"
+                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] dark:text-[#a1a1aa] hover:text-[#262626] dark:hover:text-[#f3f4f6] p-1 cursor-pointer bg-transparent border-0"
                   >
                     {showNewPassword ? (
                       <EyeOff className="w-[18px] h-[18px]" aria-hidden="true" />
@@ -374,7 +400,7 @@ export function PasswordReset({
                   <p
                     id="new-password-error"
                     role="alert"
-                    className="text-[#ed4956] text-[13px] text-left mb-[10px]"
+                    className="text-[#ed4956] dark:text-[#f87171] text-[13px] text-left mb-[10px]"
                   >
                     {newPasswordError}
                   </p>
@@ -385,10 +411,12 @@ export function PasswordReset({
                     id="password-strength-meter"
                     data-testid="password-strength-meter"
                     aria-live="polite"
-                    className="text-left mb-[12px] p-2.5 bg-[#fafafa] border border-[#efefef] rounded-[5px]"
+                    className="text-left mb-[12px] p-2.5 bg-[#fafafa] dark:bg-[#202024] border border-[#efefef] dark:border-[#2e2e33] rounded-[5px]"
                   >
                     <div className="flex items-center justify-between text-[12px] mb-1.5">
-                      <span className="text-[#737373]">Password strength</span>
+                      <span className="text-[#737373] dark:text-[#a1a1aa]">
+                        Password strength
+                      </span>
                       <span
                         data-testid="password-strength-label"
                         className={`font-semibold ${strengthColors.text}`}
@@ -411,7 +439,7 @@ export function PasswordReset({
                           className={`h-1.5 flex-1 rounded-full transition-colors ${
                             strength.score >= segment
                               ? strengthColors.bar
-                              : 'bg-[#e5e7eb]'
+                              : 'bg-[#e5e7eb] dark:bg-[#2e2e33]'
                           }`}
                         />
                       ))}
@@ -430,7 +458,9 @@ export function PasswordReset({
                         <div
                           key={req.text}
                           className={`flex items-center gap-1 ${
-                            req.met ? 'text-[#16803c]' : 'text-[#737373]'
+                            req.met
+                              ? 'text-[#16803c] dark:text-[#4ade80]'
+                              : 'text-[#737373] dark:text-[#a1a1aa]'
                           }`}
                         >
                           <Check
@@ -481,21 +511,21 @@ export function PasswordReset({
                       if (serverError) setServerError('');
                     }}
                     required
-                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] border rounded-[5px] text-[14px] outline-none ${
+                    className={`peer w-full py-[14px] pr-[42px] pl-[42px] bg-[#fafafa] dark:bg-[#1c1c20] text-[#262626] dark:text-[#f3f4f6] placeholder:text-[#737373] dark:placeholder:text-[#8e8e93] border rounded-[5px] text-[14px] outline-none ${
                       confirmPasswordError || matchStatus.status === 'mismatch'
-                        ? 'border-[#ed4956] focus:border-[#ed4956]'
+                        ? 'border-[#ed4956] dark:border-[#f87171] focus:border-[#ed4956]'
                         : matchStatus.status === 'match'
-                          ? 'border-[#16803c] focus:border-[#16803c]'
-                          : 'border-[#dbdbdb] focus:border-[#a8a8a8]'
+                          ? 'border-[#16803c] dark:border-[#4ade80] focus:border-[#16803c]'
+                          : 'border-[#dbdbdb] dark:border-[#323238] focus:border-[#a8a8a8] dark:focus:border-[#52525b]'
                     }`}
                   />
                   <Lock
-                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 ${
+                    className={`w-[18px] h-[18px] pointer-events-none absolute left-[14px] top-1/2 -translate-y-1/2 transition-colors ${
                       confirmPasswordError || matchStatus.status === 'mismatch'
-                        ? 'text-[#ed4956]'
+                        ? 'text-[#ed4956] dark:text-[#f87171]'
                         : matchStatus.status === 'match'
-                          ? 'text-[#16803c]'
-                          : 'text-[#737373] peer-focus:text-[#262626]'
+                          ? 'text-[#16803c] dark:text-[#4ade80]'
+                          : 'text-[#737373] dark:text-[#a1a1aa] peer-focus:text-[#262626] dark:peer-focus:text-[#f3f4f6]'
                     }`}
                     aria-hidden="true"
                   />
@@ -507,7 +537,7 @@ export function PasswordReset({
                         : 'Show confirm password'
                     }
                     onClick={() => setShowConfirmPassword((prev) => !prev)}
-                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#262626] p-1 cursor-pointer bg-transparent border-0"
+                    className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[#737373] dark:text-[#a1a1aa] hover:text-[#262626] dark:hover:text-[#f3f4f6] p-1 cursor-pointer bg-transparent border-0"
                   >
                     {showConfirmPassword ? (
                       <EyeOff className="w-[18px] h-[18px]" aria-hidden="true" />
@@ -521,7 +551,7 @@ export function PasswordReset({
                   <p
                     id="confirm-password-error"
                     role="alert"
-                    className="text-[#ed4956] text-[13px] text-left mb-[15px]"
+                    className="text-[#ed4956] dark:text-[#f87171] text-[13px] text-left mb-[15px]"
                   >
                     {confirmPasswordError}
                   </p>
@@ -533,8 +563,8 @@ export function PasswordReset({
                       aria-live="polite"
                       className={`flex items-center gap-1.5 text-[13px] text-left mb-[15px] ${
                         matchStatus.status === 'match'
-                          ? 'text-[#16803c]'
-                          : 'text-[#ed4956]'
+                          ? 'text-[#16803c] dark:text-[#4ade80]'
+                          : 'text-[#ed4956] dark:text-[#f87171]'
                       }`}
                     >
                       {matchStatus.status === 'match' ? (
@@ -556,7 +586,7 @@ export function PasswordReset({
                 {serverError && (
                   <p
                     role="alert"
-                    className="text-[#ed4956] text-[13px] text-left mb-[15px]"
+                    className="text-[#ed4956] dark:text-[#f87171] text-[13px] text-left mb-[15px]"
                   >
                     {serverError}
                   </p>
@@ -566,7 +596,7 @@ export function PasswordReset({
                   type="submit"
                   disabled={isResetting}
                   aria-busy={isResetting}
-                  className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors"
+                  className="w-full p-[13px] bg-[#0095f6] hover:bg-[#1877f2] disabled:bg-[#7cc8fb] dark:disabled:bg-[#0095f6]/40 disabled:hover:bg-[#7cc8fb] disabled:cursor-not-allowed text-white border-0 rounded-[5px] text-[14px] font-bold cursor-pointer flex items-center justify-center gap-2 transition-colors"
                 >
                   {isResetting ? (
                     <>
@@ -587,7 +617,7 @@ export function PasswordReset({
               <button
                 type="button"
                 onClick={onBackToLogin}
-                className="inline-block mt-[25px] text-[#262626] bg-transparent border-0 text-[14px] font-bold cursor-pointer hover:underline"
+                className="inline-block mt-[25px] text-[#262626] dark:text-[#f3f4f6] bg-transparent border-0 text-[14px] font-bold cursor-pointer hover:underline"
               >
                 Back to login
               </button>

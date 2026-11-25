@@ -28,7 +28,25 @@ function isRecoveryUrl(): boolean {
   );
 }
 
+function getInitialDarkMode(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    const stored = window.localStorage?.getItem('theme');
+    if (stored === 'dark') return true;
+    if (stored === 'light') return false;
+  } catch {
+    // Ignore storage access failures
+  }
+  return Boolean(
+    typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches,
+  );
+}
+
 export default function App() {
+  const [isDark, setIsDark] = useState<boolean>(getInitialDarkMode);
   const [view, setView] = useState<AppView>(() =>
     isRecoveryUrl() ? 'reset' : 'recovery',
   );
@@ -40,6 +58,17 @@ export default function App() {
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [toast, setToast] = useState<ToastData | null>(null);
   const nextToastIdRef = useRef(1);
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.classList.toggle('dark', isDark);
+    }
+    try {
+      window.localStorage?.setItem('theme', isDark ? 'dark' : 'light');
+    } catch {
+      // Ignore storage access failures
+    }
+  }, [isDark]);
 
   const showToast = useCallback((message: string, title?: string) => {
     setToast({
@@ -114,13 +143,16 @@ export default function App() {
   }, [isAuthChecking, session, view]);
 
   return (
-    <div className="bg-white text-[#262626] font-[Arial,sans-serif]">
+    <div className="min-h-screen bg-white dark:bg-[#0f0f10] text-[#262626] dark:text-[#f3f4f6] font-[Arial,sans-serif] transition-colors">
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-      <RecoveryHeader />
+      <RecoveryHeader
+        isDark={isDark}
+        onToggleTheme={() => setIsDark((prev) => !prev)}
+      />
 
       {isAuthChecking ? (
         <main className="min-h-[80vh] flex justify-center items-center">
-          <div className="flex items-center gap-2 text-[14px] text-[#737373]">
+          <div className="flex items-center gap-2 text-[14px] text-[#737373] dark:text-[#a1a1aa]">
             <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
             <span>Checking session...</span>
           </div>
@@ -163,6 +195,7 @@ export default function App() {
       ) : view === 'reset' ? (
         <PasswordReset
           accountEmail={session?.user.email || recoveryEmail || undefined}
+          accountUserId={session?.user.id ?? null}
           hasRecoverySession={Boolean(session)}
           otpForwarded={otpForwarded}
           onBackToLogin={() => {
