@@ -78,22 +78,39 @@ function readBuildTimeConfig(): {url: string; publishableKey: string} | null {
   ).trim();
 
   if (!url || !url.startsWith('https://') || !publishableKey) {
+    console.warn('[supabase] Build-time Vite env check incomplete:', {
+      hasViteUrl: Boolean(url),
+      isHttpsUrl: url.startsWith('https://'),
+      hasVitePublishableKey: Boolean(publishableKey),
+    });
     return null;
   }
 
+  console.info('[supabase] Detected build-time Vite env config:', {
+    url,
+    projectId: extractSupabaseProjectId(url),
+    hasVitePublishableKey: true,
+  });
   return {url, publishableKey};
 }
 
-function createOrReuseClient(config: {
-  url: string;
-  publishableKey: string;
-}): SupabaseClient | null {
+function createOrReuseClient(
+  config: {
+    url: string;
+    publishableKey: string;
+  },
+  source: 'runtime-api' | 'vite-env' = 'runtime-api',
+): SupabaseClient | null {
   const normalizedUrl = config.url.trim().replace(/\/+$/, '');
   const normalizedKey = config.publishableKey.trim();
 
   if (!normalizedUrl.startsWith('https://') || !normalizedKey) {
     lastInitError = SUPABASE_NOT_CONFIGURED_ERROR;
-    console.error('[supabase] Invalid Supabase URL or publishable key.');
+    console.error('[supabase] Invalid Supabase URL or publishable key.', {
+      source,
+      isHttpsUrl: normalizedUrl.startsWith('https://'),
+      hasPublishableKey: Boolean(normalizedKey),
+    });
     return null;
   }
 
@@ -103,8 +120,20 @@ function createOrReuseClient(config: {
   }
 
   try {
-    clearDisconnectedProjectAuthStorage(normalizedUrl);
+    const removedKeys = clearDisconnectedProjectAuthStorage(normalizedUrl);
+    if (removedKeys.length > 0) {
+      console.info(
+        '[supabase] Cleared stale auth tokens from disconnected projects:',
+        removedKeys,
+      );
+    }
+
     const projectId = extractSupabaseProjectId(normalizedUrl);
+    console.info('[supabase] Creating Supabase client instance:', {
+      source,
+      url: normalizedUrl,
+      projectId,
+    });
     const client = createClient(normalizedUrl, normalizedKey, {
       auth: {
         persistSession: true,
@@ -119,6 +148,11 @@ function createOrReuseClient(config: {
     };
     cachedClient = client;
     lastInitError = null;
+    console.info('[supabase] Supabase client instance ready:', {
+      source,
+      url: normalizedUrl,
+      projectId,
+    });
     return cachedClient;
   } catch (err) {
     lastInitError =
@@ -158,7 +192,7 @@ export function getSyncSupabaseClient(): SupabaseClient | null {
     return cachedClient;
   }
 
-  return createOrReuseClient(config);
+  return createOrReuseClient(config, 'vite-env');
 }
 
 export async function getSupabaseClient(): Promise<SupabaseClient | null> {
@@ -171,6 +205,7 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
   }
 
   initPromise = (async () => {
+    console.info('[supabase] Initializing Supabase client...');
     try {
       const response = await fetch('/api/supabase-config');
       if (response.ok) {
@@ -185,10 +220,18 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
           typeof data.publishableKey === 'string' &&
           data.publishableKey.length > 0
         ) {
-          return createOrReuseClient({
+          console.info('[supabase] Loaded runtime config from /api/supabase-config:', {
             url: data.url,
-            publishableKey: data.publishableKey,
+            projectId: extractSupabaseProjectId(data.url),
+            hasPublishableKey: true,
           });
+          return createOrReuseClient(
+            {
+              url: data.url,
+              publishableKey: data.publishableKey,
+            },
+            'runtime-api',
+          );
         }
         if (data.configured === false) {
           console.warn(

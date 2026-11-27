@@ -55,7 +55,7 @@ function readDevicePrefersDark(): boolean {
   ) {
     return false;
   }
-  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return Boolean(window.matchMedia('(prefers-color-scheme: dark)')?.matches);
 }
 
 function readStoredRecoveryEmail(): string {
@@ -115,7 +115,10 @@ export default function App() {
     }
 
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    setDevicePrefersDark(mediaQuery.matches);
+    if (!mediaQuery) {
+      return;
+    }
+    setDevicePrefersDark(Boolean(mediaQuery.matches));
 
     const handleChange = (event: MediaQueryListEvent) => {
       setDevicePrefersDark(event.matches);
@@ -175,11 +178,19 @@ export default function App() {
       }
 
       const currentSession = data?.session ?? null;
+      console.info('[supabase] Initial auth session state:', {
+        hasSession: Boolean(currentSession),
+        userId: currentSession?.user?.id ?? null,
+      });
       setSession(currentSession);
       if (currentSession?.user?.id && currentSession.user.email) {
         void syncUserProfile({
           userId: currentSession.user.id,
           email: currentSession.user.email,
+        }).then((res) => {
+          if (!res.ok) {
+            console.error('[supabase] Initial profile sync failed:', res.error);
+          }
         });
       }
 
@@ -196,11 +207,23 @@ export default function App() {
 
       const {data: listenerData} = supabase.auth.onAuthStateChange(
         (event, nextSession) => {
+          console.info('[supabase] Auth state change:', {
+            event,
+            hasSession: Boolean(nextSession),
+            userId: nextSession?.user?.id ?? null,
+          });
           setSession(nextSession ?? null);
           if (nextSession?.user?.id && nextSession.user.email) {
             void syncUserProfile({
               userId: nextSession.user.id,
               email: nextSession.user.email,
+            }).then((res) => {
+              if (!res.ok) {
+                console.error(
+                  '[supabase] Auth-change profile sync failed:',
+                  res.error,
+                );
+              }
             });
           }
 

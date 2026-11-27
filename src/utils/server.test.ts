@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {AddressInfo} from 'node:net';
-import {createApp, resolvePublicSupabaseConfig} from '../../server.ts';
+import {
+  createApp,
+  resetFormsparkCacheForTests,
+  resolveFormsparkConfig,
+  resolvePublicSupabaseConfig,
+  validateContactPayloadForFormspark,
+} from '../../server.ts';
 
 async function withServer(
   fn: (baseUrl: string) => Promise<void>,
@@ -154,4 +160,90 @@ test('POST /api/recovery-events rejects passwords, OTPs, verification codes, and
     const body = (await res.json()) as {error?: string};
     assert.match(body.error || '', /must not be stored/i);
   });
+});
+
+test('resolveFormsparkConfig reads server env vars cleanly and validateContactPayloadForFormspark blocks credentials', () => {
+  const prevKey = process.env.FORMSPARK_API_KEY;
+  const prevFormId = process.env.FORMSPARK_FORM_ID;
+
+  try {
+    resetFormsparkCacheForTests();
+    delete process.env.FORMSPARK_API_KEY;
+    delete process.env.FORMSPARK_FORM_ID;
+    assert.deepEqual(resolveFormsparkConfig(), {
+      configured: false,
+      formId: null,
+      hasApiKey: false,
+    });
+
+    process.env.FORMSPARK_API_KEY = 'fsk_test_key';
+    assert.deepEqual(resolveFormsparkConfig(), {
+      configured: true,
+      formId: null,
+      hasApiKey: true,
+    });
+
+    process.env.FORMSPARK_FORM_ID = 'abc123XYZ';
+    assert.deepEqual(resolveFormsparkConfig(), {
+      configured: true,
+      formId: 'abc123XYZ',
+      hasApiKey: true,
+    });
+
+    const blocked = validateContactPayloadForFormspark({
+      name: 'Alex Morgan',
+      email: 'alex@example.com',
+      message: 'Valid inquiry text',
+      password: 'secret-should-not-forward',
+    });
+    assert.equal(blocked.ok, false);
+
+    const valid = validateContactPayloadForFormspark({
+      name: 'Alex Morgan',
+      email: 'alex@example.com',
+      phoneNumber: '555-0100',
+      message: 'Please send my invoice receipt.',
+    });
+    assert.deepEqual(valid, {
+      ok: true,
+      data: {
+        name: 'Alex Morgan',
+        email: 'alex@example.com',
+        phoneNumber: '555-0100',
+        message: 'Please send my invoice receipt.',
+      },
+    });
+  } finally {
+    resetFormsparkCacheForTests();
+    if (prevKey === undefined) delete process.env.FORMSPARK_API_KEY;
+    else process.env.FORMSPARK_API_KEY = prevKey;
+    if (prevFormId === undefined) delete process.env.FORMSPARK_FORM_ID;
+    else process.env.FORMSPARK_FORM_ID = prevFormId;
+  }
+});
+
+test('POST /api/formspark/submit rejects unauthenticated requests', async () => {
+  const prevUrl = process.env.SUPABASE_URL;
+  const prevKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+  process.env.SUPABASE_URL = 'https://example-proj.supabase.co';
+  process.env.SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test';
+  try {
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/formspark/submit`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name: 'Alex Morgan',
+          email: 'alex@example.com',
+          message: 'Please send my invoice receipt.',
+        }),
+      });
+      assert.equal(res.status, 401);
+    });
+  } finally {
+    if (prevUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = prevUrl;
+    if (prevKey === undefined) delete process.env.SUPABASE_PUBLISHABLE_KEY;
+    else process.env.SUPABASE_PUBLISHABLE_KEY = prevKey;
+  }
 });

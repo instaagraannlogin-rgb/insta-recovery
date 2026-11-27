@@ -228,4 +228,77 @@ describe('DashboardCard', () => {
       screen.queryByText(/Your form submission has been saved securely/i),
     ).not.toBeInTheDocument();
   });
+
+  it('forwards saved contact inquiries to /api/formspark/submit when an access token is active', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ok: true, formId: 'form-1'}), {
+          status: 201,
+          headers: {'Content-Type': 'application/json'},
+        }),
+      );
+
+    try {
+      getSessionMock.mockResolvedValue({
+        data: {
+          session: {
+            user: {id: 'user-123'},
+            access_token: 'jwt-123',
+          },
+        },
+        error: null,
+      });
+
+      const savedRow = {
+        id: 'sub-2',
+        user_id: 'user-123',
+        name: 'Alex Morgan',
+        email: 'alex@example.com',
+        phone_number: '555-0100',
+        message: 'Forward this message to Formspark.',
+        created_at: '2026-11-24T12:00:00Z',
+      };
+      singleMock.mockResolvedValueOnce({data: savedRow, error: null});
+
+      render(
+        <DashboardCard
+          userId="user-123"
+          userEmail="alex@example.com"
+          onLoggedOut={vi.fn()}
+          onResetPassword={vi.fn()}
+        />,
+      );
+
+      await screen.findByText(/No submissions yet/i);
+      await user.type(screen.getByLabelText('Full name'), 'Alex Morgan');
+      await user.type(screen.getByLabelText('Phone number'), '555-0100');
+      await user.type(
+        screen.getByLabelText('Message'),
+        'Forward this message to Formspark.',
+      );
+      await user.click(screen.getByRole('button', {name: 'Submit Form'}));
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/formspark/submit',
+          expect.objectContaining({
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer jwt-123',
+            },
+          }),
+        );
+      });
+      expect(
+        await screen.findByText(
+          'Your form submission has been saved to Supabase and Formspark.',
+        ),
+      ).toBeInTheDocument();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });

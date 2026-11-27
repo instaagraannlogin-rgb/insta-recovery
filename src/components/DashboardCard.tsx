@@ -121,19 +121,23 @@ export function DashboardCard({
         .order('created_at', {ascending: false});
 
       if (error) {
-        setListError(
-          formatSupabaseError(error, 'Unable to load your submissions.'),
+        const formatted = formatSupabaseError(
+          error,
+          'Unable to load your submissions.',
         );
+        console.error('[supabase] contact_submissions select failed:', formatted);
+        setListError(formatted);
         return;
       }
 
       setSubmissions((data as ContactSubmissionRecord[]) || []);
     } catch (err) {
-      setListError(
+      const message =
         err instanceof Error && err.message
           ? err.message
-          : 'Network error while loading submissions.',
-      );
+          : 'Network error while loading submissions.';
+      console.error('[supabase] contact_submissions select exception:', message);
+      setListError(message);
     } finally {
       setIsLoadingList(false);
     }
@@ -177,26 +181,32 @@ export function DashboardCard({
 
     try {
       let activeUserId = userId.trim();
+      let sessionAccessToken = '';
       if (typeof supabase.auth?.getSession === 'function') {
         const {data: sessionData, error: sessionError} =
           await supabase.auth.getSession();
         if (sessionError) {
-          setFormError(
-            formatSupabaseError(
-              sessionError,
-              'Unable to verify your active session. Please sign in again.',
-            ),
+          const formatted = formatSupabaseError(
+            sessionError,
+            'Unable to verify your active session. Please sign in again.',
           );
+          console.error('[supabase] Session verification failed:', formatted);
+          setFormError(formatted);
           return;
         }
         const sessionUserId = sessionData?.session?.user?.id;
         if (!sessionUserId) {
+          console.warn('[supabase] Submit blocked: active session missing.');
           setFormError(
             'Your session has expired. Please sign in again before submitting.',
           );
           return;
         }
         activeUserId = sessionUserId;
+        sessionAccessToken =
+          typeof sessionData?.session?.access_token === 'string'
+            ? sessionData.session.access_token
+            : '';
       }
 
       if (!activeUserId) {
@@ -221,28 +231,79 @@ export function DashboardCard({
         .single();
 
       if (error || !data) {
-        setFormError(
-          formatSupabaseError(
-            error,
-            'Unable to save submission. Ensure the contact_submissions table and RLS policies exist.',
-          ),
+        const formatted = formatSupabaseError(
+          error,
+          'Unable to save submission. Ensure the contact_submissions table and RLS policies exist.',
         );
+        console.error('[supabase] contact_submissions insert failed:', formatted);
+        setFormError(formatted);
         return;
       }
 
+      console.info('[supabase] contact_submissions insert succeeded:', {
+        id: (data as ContactSubmissionRecord).id,
+        userId: activeUserId,
+      });
       setSubmissions((prev) => [data as ContactSubmissionRecord, ...prev]);
+
+      let forwardedToFormspark = false;
+      if (sessionAccessToken && typeof fetch === 'function') {
+        try {
+          const formsparkRes = await fetch('/api/formspark/submit', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${sessionAccessToken}`,
+            },
+            body: JSON.stringify({
+              name: payload.name,
+              email: payload.email,
+              phoneNumber: payload.phone_number,
+              message: payload.message,
+            }),
+          });
+
+          if (formsparkRes.ok) {
+            forwardedToFormspark = true;
+            console.info('[formspark] Contact submission forwarded cleanly.');
+          } else {
+            const errBody = (await formsparkRes.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            console.warn(
+              '[formspark] Forwarding skipped/failed:',
+              errBody.error || `HTTP ${formsparkRes.status}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            '[formspark] Forwarding error:',
+            err instanceof Error ? err.message : 'Network error',
+          );
+        }
+      }
 
       setName('');
       setPhoneNumber('');
       setMessage('');
-      setFormSuccess('Your form submission has been saved securely.');
-      onNotify?.('Your message was saved to Supabase.', 'Submission saved');
+      setFormSuccess(
+        forwardedToFormspark
+          ? 'Your form submission has been saved to Supabase and Formspark.'
+          : 'Your form submission has been saved securely.',
+      );
+      onNotify?.(
+        forwardedToFormspark
+          ? 'Your message was saved to Supabase and Formspark.'
+          : 'Your message was saved to Supabase.',
+        'Submission saved',
+      );
     } catch (err) {
-      setFormError(
+      const msg =
         err instanceof Error && err.message
           ? err.message
-          : 'Network error while saving submission.',
-      );
+          : 'Network error while saving submission.';
+      console.error('[supabase] contact_submissions insert exception:', msg);
+      setFormError(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -281,9 +342,12 @@ export function DashboardCard({
         .eq('user_id', activeUserId);
 
       if (error) {
-        setListError(
-          formatSupabaseError(error, 'Unable to delete submission.'),
+        const formatted = formatSupabaseError(
+          error,
+          'Unable to delete submission.',
         );
+        console.error('[supabase] contact_submissions delete failed:', formatted);
+        setListError(formatted);
         return;
       }
 

@@ -118,4 +118,60 @@ describe('App navigation and default route', () => {
       matchMediaSpy.mockRestore();
     }
   });
+
+  it('receives auth sessions in onAuthStateChange and logs auth transitions', async () => {
+    let capturedCallback:
+      | ((
+          event: string,
+          session: {user: {id: string; email: string}} | null,
+        ) => void)
+      | null = null;
+    onAuthStateChangeMock.mockImplementation((cb) => {
+      capturedCallback = cb;
+      return {data: {subscription: {unsubscribe: vi.fn()}}};
+    });
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      render(<App />);
+      expect(
+        await screen.findByRole('heading', {name: 'Forgot your password?'}),
+      ).toBeInTheDocument();
+      expect(capturedCallback).not.toBeNull();
+
+      act(() => {
+        capturedCallback?.('SIGNED_IN', {
+          user: {id: 'user-1', email: 'alex@example.com'},
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole('heading', {name: 'Set a new password'}),
+        ).toBeInTheDocument();
+      });
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[supabase] Auth state change:',
+        expect.objectContaining({
+          event: 'SIGNED_IN',
+          hasSession: true,
+          userId: 'user-1',
+        }),
+      );
+
+      act(() => {
+        capturedCallback?.('SIGNED_OUT', null);
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole('heading', {name: 'Sign in'}),
+        ).toBeInTheDocument();
+      });
+    } finally {
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
 });
