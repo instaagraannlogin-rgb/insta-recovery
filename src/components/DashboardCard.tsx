@@ -9,60 +9,23 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
+import {ContactSubmissionRecord, apiRequest} from '../utils/apiClient';
 import {validateContactSubmission} from '../utils/recovery';
-import {
-  SUPABASE_NOT_CONFIGURED_ERROR,
-  getSupabaseClient,
-} from '../utils/supabaseClient';
 
-export interface ContactSubmissionRecord {
-  id: string;
-  user_id: string;
-  name: string;
-  email: string;
-  phone_number: string;
-  message: string;
-  created_at: string;
-}
+export type {ContactSubmissionRecord};
 
 interface DashboardCardProps {
   userId: string;
   userEmail: string;
+  accessToken: string;
   onLoggedOut: () => void;
   onResetPassword: () => void;
   onNotify?: (message: string, title?: string) => void;
 }
 
-interface SupabaseErrorLike {
-  code?: unknown;
-  message?: unknown;
-  details?: unknown;
-  hint?: unknown;
-}
-
-function formatSupabaseError(error: unknown, fallback: string): string {
-  if (!error || typeof error !== 'object') {
-    return error instanceof Error && error.message ? error.message : fallback;
-  }
-
-  const err = error as SupabaseErrorLike;
-  const code = typeof err.code === 'string' ? err.code.trim() : '';
-  const message = typeof err.message === 'string' ? err.message.trim() : '';
-  const details = typeof err.details === 'string' ? err.details.trim() : '';
-  const hint = typeof err.hint === 'string' ? err.hint.trim() : '';
-
-  const parts: string[] = [];
-  if (code) parts.push(`[${code}]`);
-  if (message) parts.push(message);
-  if (details && details !== message) parts.push(details);
-  if (hint) parts.push(`Hint: ${hint}`);
-
-  return parts.length > 0 ? parts.join(' — ') : fallback;
-}
-
 export function DashboardCard({
-  userId,
   userEmail,
+  accessToken,
   onLoggedOut,
   onResetPassword,
   onNotify,
@@ -89,59 +52,28 @@ export function DashboardCard({
   const loadSubmissions = useCallback(async () => {
     setIsLoadingList(true);
     setListError('');
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setListError(SUPABASE_NOT_CONFIGURED_ERROR);
+
+    if (!accessToken) {
+      setListError('Your session has expired. Please sign in again.');
       setIsLoadingList(false);
       return;
     }
 
-    try {
-      if (typeof supabase.auth?.getSession === 'function') {
-        const {data: sessionData, error: sessionError} =
-          await supabase.auth.getSession();
-        if (sessionError) {
-          setListError(
-            formatSupabaseError(
-              sessionError,
-              'Unable to verify your active session.',
-            ),
-          );
-          return;
-        }
-        if (!sessionData?.session?.user?.id) {
-          setListError('Your session has expired. Please sign in again.');
-          return;
-        }
-      }
+    const result = await apiRequest<{submissions: ContactSubmissionRecord[]}>(
+      '/api/submissions',
+      {
+        method: 'GET',
+        token: accessToken,
+      },
+    );
 
-      const {data, error} = await supabase
-        .from('contact_submissions')
-        .select('id, user_id, name, email, phone_number, message, created_at')
-        .order('created_at', {ascending: false});
-
-      if (error) {
-        const formatted = formatSupabaseError(
-          error,
-          'Unable to load your submissions.',
-        );
-        console.error('[supabase] contact_submissions select failed:', formatted);
-        setListError(formatted);
-        return;
-      }
-
-      setSubmissions((data as ContactSubmissionRecord[]) || []);
-    } catch (err) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : 'Network error while loading submissions.';
-      console.error('[supabase] contact_submissions select exception:', message);
-      setListError(message);
-    } finally {
-      setIsLoadingList(false);
+    if (result.ok === false) {
+      setListError(result.error);
+    } else {
+      setSubmissions(result.data.submissions || []);
     }
-  }, []);
+    setIsLoadingList(false);
+  }, [accessToken]);
 
   useEffect(() => {
     setEmail(userEmail);
@@ -171,194 +103,76 @@ export function DashboardCard({
       return;
     }
 
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setFormError(SUPABASE_NOT_CONFIGURED_ERROR);
+    if (!accessToken) {
+      setFormError(
+        'Your session has expired. Please sign in again before submitting.',
+      );
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      let activeUserId = userId.trim();
-      let sessionAccessToken = '';
-      if (typeof supabase.auth?.getSession === 'function') {
-        const {data: sessionData, error: sessionError} =
-          await supabase.auth.getSession();
-        if (sessionError) {
-          const formatted = formatSupabaseError(
-            sessionError,
-            'Unable to verify your active session. Please sign in again.',
-          );
-          console.error('[supabase] Session verification failed:', formatted);
-          setFormError(formatted);
-          return;
-        }
-        const sessionUserId = sessionData?.session?.user?.id;
-        if (!sessionUserId) {
-          console.warn('[supabase] Submit blocked: active session missing.');
-          setFormError(
-            'Your session has expired. Please sign in again before submitting.',
-          );
-          return;
-        }
-        activeUserId = sessionUserId;
-        sessionAccessToken =
-          typeof sessionData?.session?.access_token === 'string'
-            ? sessionData.session.access_token
-            : '';
-      }
-
-      if (!activeUserId) {
-        setFormError(
-          'Unable to identify your signed-in account. Please sign in again.',
-        );
-        return;
-      }
-
-      const payload = {
-        user_id: activeUserId,
-        name: name.trim(),
-        email: email.trim(),
-        phone_number: phoneNumber.trim(),
-        message: message.trim(),
-      };
-
-      const {data, error} = await supabase
-        .from('contact_submissions')
-        .insert([payload])
-        .select('id, user_id, name, email, phone_number, message, created_at')
-        .single();
-
-      if (error || !data) {
-        const formatted = formatSupabaseError(
-          error,
-          'Unable to save submission. Ensure the contact_submissions table and RLS policies exist.',
-        );
-        console.error('[supabase] contact_submissions insert failed:', formatted);
-        setFormError(formatted);
-        return;
-      }
-
-      console.info('[supabase] contact_submissions insert succeeded:', {
-        id: (data as ContactSubmissionRecord).id,
-        userId: activeUserId,
+      const result = await apiRequest<{
+        ok: boolean;
+        formId: string;
+        submission: ContactSubmissionRecord;
+      }>('/api/submissions', {
+        method: 'POST',
+        token: accessToken,
+        body: {
+          name: name.trim(),
+          email: email.trim(),
+          phoneNumber: phoneNumber.trim(),
+          message: message.trim(),
+        },
       });
-      setSubmissions((prev) => [data as ContactSubmissionRecord, ...prev]);
 
-      let forwardedToFormspark = false;
-      if (sessionAccessToken && typeof fetch === 'function') {
-        try {
-          const formsparkRes = await fetch('/api/formspark/submit', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${sessionAccessToken}`,
-            },
-            body: JSON.stringify({
-              name: payload.name,
-              email: payload.email,
-              phoneNumber: payload.phone_number,
-              message: payload.message,
-            }),
-          });
-
-          if (formsparkRes.ok) {
-            forwardedToFormspark = true;
-            console.info('[formspark] Contact submission forwarded cleanly.');
-          } else {
-            const errBody = (await formsparkRes.json().catch(() => ({}))) as {
-              error?: string;
-            };
-            console.warn(
-              '[formspark] Forwarding skipped/failed:',
-              errBody.error || `HTTP ${formsparkRes.status}`,
-            );
-          }
-        } catch (err) {
-          console.warn(
-            '[formspark] Forwarding error:',
-            err instanceof Error ? err.message : 'Network error',
-          );
-        }
+      if (result.ok === false || !result.data.submission) {
+        setFormError(
+          result.ok === false
+            ? result.error
+            : 'Unable to save submission to Formspark.',
+        );
+        return;
       }
 
+      setSubmissions((prev) => [result.data.submission, ...prev]);
       setName('');
       setPhoneNumber('');
       setMessage('');
       setFormSuccess(
-        forwardedToFormspark
-          ? 'Your form submission has been saved to Supabase and Formspark.'
-          : 'Your form submission has been saved securely.',
+        'Your form submission has been saved to Formspark securely.',
       );
-      onNotify?.(
-        forwardedToFormspark
-          ? 'Your message was saved to Supabase and Formspark.'
-          : 'Your message was saved to Supabase.',
-        'Submission saved',
-      );
-    } catch (err) {
-      const msg =
-        err instanceof Error && err.message
-          ? err.message
-          : 'Network error while saving submission.';
-      console.error('[supabase] contact_submissions insert exception:', msg);
-      setFormError(msg);
+      onNotify?.('Your message was saved to Formspark.', 'Submission saved');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    const supabase = await getSupabaseClient();
-    if (!supabase) return;
+    if (!accessToken) {
+      setListError('Your session has expired. Please sign in again.');
+      return;
+    }
 
     setDeletingId(id);
     try {
-      let activeUserId = userId.trim();
-      if (typeof supabase.auth?.getSession === 'function') {
-        const {data: sessionData, error: sessionError} =
-          await supabase.auth.getSession();
-        if (sessionError) {
-          setListError(
-            formatSupabaseError(
-              sessionError,
-              'Unable to verify your active session.',
-            ),
-          );
-          return;
-        }
-        if (!sessionData?.session?.user?.id) {
-          setListError('Your session has expired. Please sign in again.');
-          return;
-        }
-        activeUserId = sessionData.session.user.id;
-      }
+      const result = await apiRequest<{ok: boolean}>(
+        `/api/submissions/${encodeURIComponent(id)}`,
+        {
+          method: 'DELETE',
+          token: accessToken,
+        },
+      );
 
-      const {error} = await supabase
-        .from('contact_submissions')
-        .delete()
-        .eq('id', id)
-        .eq('user_id', activeUserId);
-
-      if (error) {
-        const formatted = formatSupabaseError(
-          error,
-          'Unable to delete submission.',
-        );
-        console.error('[supabase] contact_submissions delete failed:', formatted);
-        setListError(formatted);
+      if (result.ok === false) {
+        setListError(result.error);
         return;
       }
 
       setSubmissions((prev) => prev.filter((item) => item.id !== id));
       onNotify?.('Submission deleted.', 'Deleted');
-    } catch (err) {
-      setListError(
-        err instanceof Error && err.message
-          ? err.message
-          : 'Network error while deleting submission.',
-      );
     } finally {
       setDeletingId(null);
     }
@@ -368,10 +182,12 @@ export function DashboardCard({
     if (isLoggingOut) return;
     setIsLoggingOut(true);
 
-    const supabase = await getSupabaseClient();
     try {
-      if (supabase) {
-        await supabase.auth.signOut();
+      if (accessToken) {
+        await apiRequest<{ok: boolean}>('/api/auth/logout', {
+          method: 'POST',
+          token: accessToken,
+        });
       }
       onNotify?.('You have been logged out.', 'Signed out');
       onLoggedOut();

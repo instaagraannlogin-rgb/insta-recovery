@@ -9,30 +9,19 @@ import {
   SHORT_PASSWORD_ERROR,
 } from '../utils/recovery';
 
-const {getSessionMock, updateUserMock} = vi.hoisted(() => ({
-  getSessionMock: vi.fn(),
-  updateUserMock: vi.fn(),
+const {apiRequestMock} = vi.hoisted(() => ({
+  apiRequestMock: vi.fn(),
 }));
 
-vi.mock('../utils/supabaseClient', () => ({
-  SUPABASE_NOT_CONFIGURED_ERROR: 'Supabase is not configured.',
-  getSupabaseClient: vi.fn(async () => ({
-    auth: {
-      getSession: getSessionMock,
-      updateUser: updateUserMock,
-    },
-  })),
+vi.mock('../utils/apiClient', () => ({
+  apiRequest: apiRequestMock,
 }));
 
 import {PasswordReset} from './PasswordReset';
 
 describe('PasswordReset', () => {
   beforeEach(() => {
-    getSessionMock.mockReset();
-    updateUserMock.mockReset();
-    getSessionMock.mockResolvedValue({
-      data: {session: {user: {email: 'alex@example.com'}}},
-    });
+    apiRequestMock.mockReset();
   });
 
   it('blocks reset form when no recovery session is active', async () => {
@@ -56,7 +45,11 @@ describe('PasswordReset', () => {
   it('validates current, new, and confirm passwords and supports real-time match feedback', async () => {
     const user = userEvent.setup();
     render(
-      <PasswordReset accountEmail="alex@example.com" hasRecoverySession={true} />,
+      <PasswordReset
+        accountEmail="alex@example.com"
+        accessToken="jwt-token"
+        hasRecoverySession={true}
+      />,
     );
 
     await user.click(screen.getByRole('button', {name: 'Reset Password'}));
@@ -64,7 +57,7 @@ describe('PasswordReset', () => {
     expect(alerts[0]).toHaveTextContent(EMPTY_CURRENT_PASSWORD_ERROR);
     expect(alerts[1]).toHaveTextContent(EMPTY_PASSWORD_ERROR);
     expect(alerts[2]).toHaveTextContent(CONFIRM_PASSWORD_EMPTY_ERROR);
-    expect(updateUserMock).not.toHaveBeenCalled();
+    expect(apiRequestMock).not.toHaveBeenCalled();
 
     await user.type(screen.getByLabelText('Current password'), 'OldPass123');
     const newPwd = screen.getByLabelText('New password');
@@ -81,15 +74,16 @@ describe('PasswordReset', () => {
     expect(updatedAlerts[1]).toHaveTextContent(PASSWORD_MISMATCH_ERROR);
   });
 
-  it('updates password via supabase.auth.updateUser and displays Password changed successfully', async () => {
+  it('updates password via /api/auth/password-reset and displays Password changed successfully', async () => {
     const user = userEvent.setup();
     const onResetSuccess = vi.fn();
     const onBackToLogin = vi.fn();
-    updateUserMock.mockResolvedValueOnce({data: {}, error: null});
+    apiRequestMock.mockResolvedValueOnce({ok: true, data: {ok: true}});
 
     render(
       <PasswordReset
         accountEmail="alex@example.com"
+        accessToken="jwt-token"
         hasRecoverySession={true}
         onResetSuccess={onResetSuccess}
         onBackToLogin={onBackToLogin}
@@ -110,7 +104,14 @@ describe('PasswordReset', () => {
         screen.getByRole('heading', {name: 'Password changed successfully'}),
       ).toBeInTheDocument();
     });
-    expect(updateUserMock).toHaveBeenCalledWith({password: 'StrongPass123'});
+    expect(apiRequestMock).toHaveBeenCalledWith('/api/auth/password-reset', {
+      method: 'POST',
+      token: 'jwt-token',
+      body: {
+        currentPassword: 'OldPass123',
+        newPassword: 'StrongPass123',
+      },
+    });
     expect(onResetSuccess).toHaveBeenCalledTimes(1);
 
     await user.click(
@@ -121,7 +122,6 @@ describe('PasswordReset', () => {
 
   it('displays password strength meter progression and Password changed successfully for otpForwarded flow', async () => {
     const user = userEvent.setup();
-    getSessionMock.mockResolvedValueOnce({data: {session: null}});
 
     render(
       <PasswordReset

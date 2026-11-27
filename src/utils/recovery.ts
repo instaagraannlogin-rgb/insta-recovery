@@ -421,7 +421,7 @@ export function validateOtpCode(value: string): string {
   return parsed.error.issues[0]?.message || INVALID_OTP_ERROR;
 }
 
-export function mapSupabaseAuthError(error: unknown, fallback: string): string {
+export function mapAuthError(error: unknown, fallback: string): string {
   const rawMessage =
     typeof error === 'object' &&
     error !== null &&

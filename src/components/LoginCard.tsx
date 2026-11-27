@@ -1,20 +1,17 @@
 import {FormEvent, useRef, useState} from 'react';
-import {CheckCircle2, Eye, EyeOff, Loader2, Lock, User} from 'lucide-react';
+import {Eye, EyeOff, Loader2, Lock, User} from 'lucide-react';
+import {AppSession, apiRequest} from '../utils/apiClient';
 import {
   MAX_ACCOUNT_LENGTH,
   getAccountCharacterStatus,
-  mapSupabaseAuthError,
+  mapAuthError,
   validateLoginInput,
 } from '../utils/recovery';
-import {
-  SUPABASE_NOT_CONFIGURED_ERROR,
-  getSupabaseClient,
-} from '../utils/supabaseClient';
 
 interface LoginCardProps {
   initialMode?: 'login' | 'signup';
   onForgotPassword: () => void;
-  onAuthSuccess?: () => void;
+  onAuthSuccess?: (session: AppSession) => void;
   onNotify?: (message: string, title?: string) => void;
 }
 
@@ -31,7 +28,6 @@ export function LoginCard({
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [authError, setAuthError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formWrapperRef = useRef<HTMLDivElement | null>(null);
 
@@ -72,16 +68,9 @@ export function LoginCard({
     setEmailError(validation.emailError);
     setPasswordError(validation.passwordError);
     setAuthError('');
-    setSuccessMessage('');
 
     if (!validation.isValid) {
       triggerShake();
-      return;
-    }
-
-    const supabase = await getSupabaseClient();
-    if (!supabase) {
-      setAuthError(SUPABASE_NOT_CONFIGURED_ERROR);
       return;
     }
 
@@ -89,58 +78,34 @@ export function LoginCard({
     setIsSubmitting(true);
 
     try {
-      if (mode === 'signup') {
-        const {data, error} = await supabase.auth.signUp({
-          email: trimmedEmail,
-          password,
-          options: {
-            emailRedirectTo:
-              typeof window !== 'undefined' ? window.location.origin : undefined,
-          },
-        });
+      const endpoint =
+        mode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+      const result = await apiRequest<AppSession>(endpoint, {
+        method: 'POST',
+        body: {email: trimmedEmail, password},
+      });
 
-        if (error) {
-          setAuthError(
-            mapSupabaseAuthError(error, 'Unable to create your account.'),
-          );
-          triggerShake();
-          return;
-        }
-
-        setPassword('');
-
-        if (data.session) {
-          onNotify?.(
-            `Account created and signed in as ${trimmedEmail}.`,
-            'Welcome',
-          );
-          onAuthSuccess?.();
-        } else {
-          const msg = `Account created for ${trimmedEmail}. Please check your inbox and confirm your email address before signing in.`;
-          setSuccessMessage(msg);
-          setMode('login');
-          onNotify?.(msg, 'Confirm your email');
-        }
-      } else {
-        const {error} = await supabase.auth.signInWithPassword({
-          email: trimmedEmail,
-          password,
-        });
-
-        if (error) {
-          setAuthError(
-            mapSupabaseAuthError(error, 'Unable to sign in. Please try again.'),
-          );
-          triggerShake();
-          return;
-        }
-
-        setPassword('');
-        onNotify?.(`Signed in as ${trimmedEmail}.`, 'Welcome back');
-        onAuthSuccess?.();
+      if (result.ok === false) {
+        setAuthError(
+          mapAuthError(
+            {message: result.error},
+            mode === 'signup'
+              ? 'Unable to create your account.'
+              : 'Unable to sign in. Please try again.',
+          ),
+        );
+        triggerShake();
+        return;
       }
-    } catch {
-      setAuthError('Network error while connecting to Supabase.');
+
+      setPassword('');
+      onNotify?.(
+        mode === 'signup'
+          ? `Account created and signed in as ${trimmedEmail}.`
+          : `Signed in as ${trimmedEmail}.`,
+        mode === 'signup' ? 'Welcome' : 'Welcome back',
+      );
+      onAuthSuccess?.(result.data);
     } finally {
       setIsSubmitting(false);
     }
@@ -165,16 +130,6 @@ export function LoginCard({
             ? 'Enter your email and password to access your dashboard.'
             : 'Create an account with your email and password.'}
         </p>
-
-        {successMessage && (
-          <div
-            role="status"
-            className="flex items-start gap-2 text-left text-[13px] text-[#16803c] dark:text-[#4ade80] bg-[#f0fdf4] dark:bg-[#052e16]/50 border border-[#bbf7d0] dark:border-[#166534] rounded-[5px] p-3 mb-[16px]"
-          >
-            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-            <span>{successMessage}</span>
-          </div>
-        )}
 
         <div ref={formWrapperRef}>
           <form id="loginForm" onSubmit={handleSubmit} noValidate>
@@ -359,7 +314,6 @@ export function LoginCard({
               setEmailError('');
               setPasswordError('');
               setAuthError('');
-              setSuccessMessage('');
             }}
             className="text-[#0095f6] hover:text-[#1877f2] bg-transparent border-0 text-[13px] font-semibold cursor-pointer"
           >

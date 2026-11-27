@@ -1,22 +1,6 @@
 import {act, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-
-const {getSessionMock, onAuthStateChangeMock} = vi.hoisted(() => ({
-  getSessionMock: vi.fn(),
-  onAuthStateChangeMock: vi.fn(),
-}));
-
-vi.mock('../utils/supabaseClient', () => ({
-  SUPABASE_NOT_CONFIGURED_ERROR: 'Supabase is not configured.',
-  getSupabaseClient: vi.fn(async () => ({
-    auth: {
-      getSession: getSessionMock,
-      onAuthStateChange: onAuthStateChangeMock,
-    },
-  })),
-}));
-
 import App from '../App';
 
 describe('App navigation and default route', () => {
@@ -24,12 +8,6 @@ describe('App navigation and default route', () => {
     window.history.replaceState(null, '', '/');
     window.localStorage.clear();
     document.documentElement.classList.remove('dark');
-    getSessionMock.mockReset();
-    onAuthStateChangeMock.mockReset();
-    getSessionMock.mockResolvedValue({data: {session: null}});
-    onAuthStateChangeMock.mockReturnValue({
-      data: {subscription: {unsubscribe: vi.fn()}},
-    });
   });
 
   it('opens Forgot your password? by default and navigates to Sign in on Back to login', async () => {
@@ -92,7 +70,6 @@ describe('App navigation and default route', () => {
       expect(screen.queryByTestId('theme-mode-system')).not.toBeInTheDocument();
       expect(document.documentElement.classList.contains('dark')).toBe(false);
 
-      // Device switches to dark mode dynamically while no custom override is selected
       prefersDark = true;
       act(() => {
         for (const listener of changeListeners) {
@@ -103,75 +80,17 @@ describe('App navigation and default route', () => {
         expect(document.documentElement.classList.contains('dark')).toBe(true);
       });
 
-      // User overrides with custom Light mode
       await user.click(lightBtn);
       expect(lightBtn).toHaveAttribute('aria-pressed', 'true');
       expect(document.documentElement.classList.contains('dark')).toBe(false);
       expect(window.localStorage.getItem('theme')).toBe('light');
 
-      // User overrides with custom Dark mode
       await user.click(darkBtn);
       expect(darkBtn).toHaveAttribute('aria-pressed', 'true');
       expect(document.documentElement.classList.contains('dark')).toBe(true);
       expect(window.localStorage.getItem('theme')).toBe('dark');
     } finally {
       matchMediaSpy.mockRestore();
-    }
-  });
-
-  it('receives auth sessions in onAuthStateChange and logs auth transitions', async () => {
-    let capturedCallback:
-      | ((
-          event: string,
-          session: {user: {id: string; email: string}} | null,
-        ) => void)
-      | null = null;
-    onAuthStateChangeMock.mockImplementation((cb) => {
-      capturedCallback = cb;
-      return {data: {subscription: {unsubscribe: vi.fn()}}};
-    });
-    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      render(<App />);
-      expect(
-        await screen.findByRole('heading', {name: 'Forgot your password?'}),
-      ).toBeInTheDocument();
-      expect(capturedCallback).not.toBeNull();
-
-      act(() => {
-        capturedCallback?.('SIGNED_IN', {
-          user: {id: 'user-1', email: 'alex@example.com'},
-        });
-      });
-
-      await waitFor(() => {
-        expect(
-          screen.getByRole('heading', {name: 'Set a new password'}),
-        ).toBeInTheDocument();
-      });
-      expect(infoSpy).toHaveBeenCalledWith(
-        '[supabase] Auth state change:',
-        expect.objectContaining({
-          event: 'SIGNED_IN',
-          hasSession: true,
-          userId: 'user-1',
-        }),
-      );
-
-      act(() => {
-        capturedCallback?.('SIGNED_OUT', null);
-      });
-
-      await waitFor(() => {
-        expect(
-          screen.getByRole('heading', {name: 'Sign in'}),
-        ).toBeInTheDocument();
-      });
-    } finally {
-      infoSpy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 });

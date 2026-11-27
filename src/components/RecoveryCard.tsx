@@ -1,22 +1,20 @@
-import type {Session} from '@supabase/supabase-js';
 import {FormEvent, useRef, useState} from 'react';
 import {CheckCircle2, KeyRound, Loader2, User} from 'lucide-react';
+import {AppSession, apiRequest} from '../utils/apiClient';
 import {
   LINK_SENT_MESSAGE,
   MAX_ACCOUNT_LENGTH,
   OTP_LENGTH,
   getAccountCharacterStatus,
-  mapSupabaseAuthError,
+  mapAuthError,
   normalizeOtpInput,
   processRecoverySubmission,
   validateOtpCode,
 } from '../utils/recovery';
-import {recordRecoveryEvent} from '../utils/recoveryEvents';
-import {getSupabaseClient} from '../utils/supabaseClient';
 
 interface RecoveryCardProps {
   onBackToLogin?: () => void;
-  onOtpVerified?: (session: Session | null, email: string) => void;
+  onOtpVerified?: (session: AppSession | null, email: string) => void;
   onNotify?: (message: string, title?: string) => void;
 }
 
@@ -89,41 +87,16 @@ export function RecoveryCard({
     setIsSubmitting(true);
 
     try {
-      const supabase = await getSupabaseClient();
-      if (supabase) {
-        try {
-          const redirectTo =
-            typeof window !== 'undefined'
-              ? `${window.location.origin}/#reset-password`
-              : undefined;
-          const {error: resetError} =
-            await supabase.auth.resetPasswordForEmail(trimmedEmail, {
-              redirectTo,
-            });
-          if (resetError) {
-            console.warn(
-              '[supabase] resetPasswordForEmail warning:',
-              resetError.message,
-            );
-          }
-        } catch (err) {
-          console.warn(
-            '[supabase] resetPasswordForEmail exception:',
-            err instanceof Error ? err.message : 'Request failed',
-          );
-          // Proceed to the 8-digit verification step even if rate-limited in preview
-        }
-      }
+      const response = await apiRequest<{ok: boolean; message: string}>(
+        '/api/auth/recovery/request',
+        {
+          method: 'POST',
+          body: {email: trimmedEmail},
+        },
+      );
 
-      const eventResult = await recordRecoveryEvent({
-        email: trimmedEmail,
-        eventType: 'recovery_requested',
-      });
-      if (!eventResult.ok && eventResult.error) {
-        console.warn(
-          '[supabase] recovery_requested event not logged:',
-          eventResult.error,
-        );
+      if (response.ok === false) {
+        console.warn('[recovery] Request notice:', response.error);
       }
 
       setSubmittedEmail(trimmedEmail);
@@ -153,38 +126,16 @@ export function RecoveryCard({
     setIsVerifying(true);
 
     try {
-      let verifiedSession: Session | null = null;
-      const supabase = await getSupabaseClient();
-      if (supabase) {
-        try {
-          const {data, error: otpErr} = await supabase.auth.verifyOtp({
-            email: submittedEmail,
-            token: otp,
-            type: 'recovery',
-          });
-          if (otpErr) {
-            console.warn('[supabase] verifyOtp warning:', otpErr.message);
-          }
-          verifiedSession = data?.session ?? null;
-        } catch (err) {
-          console.warn(
-            '[supabase] verifyOtp exception:',
-            err instanceof Error ? err.message : 'Verification failed',
-          );
-          verifiedSession = null;
-        }
-      }
+      const response = await apiRequest<{verified: boolean; email: string}>(
+        '/api/auth/recovery/verify',
+        {
+          method: 'POST',
+          body: {email: submittedEmail, otp},
+        },
+      );
 
-      const eventResult = await recordRecoveryEvent({
-        email: submittedEmail,
-        eventType: 'otp_verified',
-        userId: verifiedSession?.user?.id ?? null,
-      });
-      if (!eventResult.ok && eventResult.error) {
-        console.warn(
-          '[supabase] otp_verified event not logged:',
-          eventResult.error,
-        );
+      if (response.ok === false) {
+        console.warn('[recovery] OTP verification notice:', response.error);
       }
 
       setOtp('');
@@ -192,7 +143,7 @@ export function RecoveryCard({
         'Verification code confirmed. Set your new password.',
         'Code verified',
       );
-      onOtpVerified?.(verifiedSession, submittedEmail);
+      onOtpVerified?.(null, submittedEmail);
     } finally {
       setIsVerifying(false);
     }
@@ -207,34 +158,28 @@ export function RecoveryCard({
     setIsResending(true);
 
     try {
-      const supabase = await getSupabaseClient();
-      if (supabase) {
-        const redirectTo =
-          typeof window !== 'undefined'
-            ? `${window.location.origin}/#reset-password`
-            : undefined;
-        const {error} = await supabase.auth.resetPasswordForEmail(
-          submittedEmail,
-          {redirectTo},
-        );
+      const response = await apiRequest<{ok: boolean}>(
+        '/api/auth/recovery/request',
+        {
+          method: 'POST',
+          body: {email: submittedEmail},
+        },
+      );
 
-        if (error) {
-          setOtpError(
-            mapSupabaseAuthError(
-              error,
-              'Unable to resend verification code. Please try again.',
-            ),
-          );
-          return;
-        }
+      if (response.ok === false) {
+        setOtpError(
+          mapAuthError(
+            {message: response.error},
+            'Unable to resend verification code. Please try again.',
+          ),
+        );
+        return;
       }
 
       onNotify?.(
         `A new 8-digit verification code was sent to ${submittedEmail}.`,
         'Code resent',
       );
-    } catch {
-      setOtpError('Network error while resending verification code.');
     } finally {
       setIsResending(false);
     }

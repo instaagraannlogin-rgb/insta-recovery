@@ -8,18 +8,17 @@ import {
   Loader2,
   Lock,
 } from 'lucide-react';
+import {apiRequest} from '../utils/apiClient';
 import {
   getPasswordMatchStatus,
   getPasswordStrength,
-  mapSupabaseAuthError,
+  mapAuthError,
   validatePasswordResetInput,
 } from '../utils/recovery';
-import {recordRecoveryEvent} from '../utils/recoveryEvents';
-import {getSupabaseClient} from '../utils/supabaseClient';
 
 interface PasswordResetProps {
   accountEmail?: string;
-  accountUserId?: string | null;
+  accessToken?: string | null;
   hasRecoverySession: boolean;
   otpForwarded?: boolean;
   onBackToLogin?: () => void;
@@ -52,7 +51,7 @@ const STRENGTH_COLOR_MAP = {
 
 export function PasswordReset({
   accountEmail,
-  accountUserId = null,
+  accessToken = null,
   hasRecoverySession,
   otpForwarded = false,
   onBackToLogin,
@@ -127,43 +126,31 @@ export function PasswordReset({
     setIsResetting(true);
 
     try {
-      let activeEmail = accountEmail;
-      let activeUserId = accountUserId;
+      if (accessToken) {
+        const res = await apiRequest<{ok: boolean}>('/api/auth/password-reset', {
+          method: 'POST',
+          token: accessToken,
+          body: {
+            currentPassword,
+            newPassword,
+          },
+        });
 
-      const supabase = await getSupabaseClient();
-      if (supabase) {
-        const {data: sessionData} = await supabase.auth.getSession();
-        if (sessionData.session) {
-          activeEmail = sessionData.session.user?.email || activeEmail;
-          activeUserId = sessionData.session.user?.id ?? activeUserId;
-          const {error} = await supabase.auth.updateUser({
-            password: newPassword,
-          });
-
-          if (error) {
-            setServerError(
-              mapSupabaseAuthError(
-                error,
-                'Unable to update your password. Please try again.',
-              ),
-            );
-            triggerShake();
-            return;
-          }
-        } else if (!otpForwarded) {
+        if (res.ok === false) {
           setServerError(
-            'Your recovery session has expired. Please request a new reset link.',
+            mapAuthError(
+              {message: res.error},
+              'Unable to update your password. Please try again.',
+            ),
           );
+          triggerShake();
           return;
         }
-      }
-
-      if (activeEmail) {
-        await recordRecoveryEvent({
-          email: activeEmail,
-          eventType: 'password_changed',
-          userId: activeUserId,
-        });
+      } else if (!otpForwarded) {
+        setServerError(
+          'Your recovery session has expired. Please request a new reset link.',
+        );
+        return;
       }
 
       setCurrentPassword('');
@@ -171,8 +158,6 @@ export function PasswordReset({
       setConfirmPassword('');
       setResetCompleted(true);
       onResetSuccess?.();
-    } catch {
-      setServerError('Network error while updating password.');
     } finally {
       setIsResetting(false);
     }

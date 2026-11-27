@@ -3,20 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {Session} from '@supabase/supabase-js';
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {Loader2} from 'lucide-react';
 import {DashboardCard} from './components/DashboardCard';
 import {LoginCard} from './components/LoginCard';
 import {PasswordReset} from './components/PasswordReset';
 import {RecoveryCard} from './components/RecoveryCard';
-import {
-  RecoveryFooter,
-} from './components/RecoveryFooter';
+import {RecoveryFooter} from './components/RecoveryFooter';
 import {RecoveryHeader, ThemeMode} from './components/RecoveryHeader';
 import {Toast, ToastData} from './components/Toast';
-import {syncUserProfile} from './utils/recoveryEvents';
-import {getSupabaseClient} from './utils/supabaseClient';
+import {AppSession} from './utils/apiClient';
 
 type AppView = 'login' | 'recovery' | 'reset' | 'dashboard';
 
@@ -95,14 +90,11 @@ export default function App() {
   const [view, setView] = useState<AppView>(() =>
     isRecoveryUrl() ? 'reset' : 'recovery',
   );
-  const viewRef = useRef<AppView>(view);
-  viewRef.current = view;
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<AppSession | null>(null);
   const [recoveryEmail, setRecoveryEmail] = useState<string>(
     readStoredRecoveryEmail,
   );
   const [otpForwarded, setOtpForwarded] = useState(false);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [toast, setToast] = useState<ToastData | null>(null);
   const nextToastIdRef = useRef(1);
 
@@ -155,110 +147,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let active = true;
-    let subscription: {unsubscribe: () => void} | null = null;
-
-    async function initAuth() {
-      const supabase = await getSupabaseClient();
-      if (!active) return;
-
-      if (!supabase) {
-        setIsAuthChecking(false);
-        return;
-      }
-
-      const {data, error: sessionError} = await supabase.auth.getSession();
-      if (!active) return;
-
-      if (sessionError) {
-        console.error(
-          '[supabase] Failed to restore auth session:',
-          sessionError.message,
-        );
-      }
-
-      const currentSession = data?.session ?? null;
-      console.info('[supabase] Initial auth session state:', {
-        hasSession: Boolean(currentSession),
-        userId: currentSession?.user?.id ?? null,
-      });
-      setSession(currentSession);
-      if (currentSession?.user?.id && currentSession.user.email) {
-        void syncUserProfile({
-          userId: currentSession.user.id,
-          email: currentSession.user.email,
-        }).then((res) => {
-          if (!res.ok) {
-            console.error('[supabase] Initial profile sync failed:', res.error);
-          }
-        });
-      }
-
-      if (isRecoveryUrl() && currentSession) {
-        setView('reset');
-      } else if (currentSession) {
-        setView('dashboard');
-      } else if (isRecoveryUrl()) {
-        setView('reset');
-      } else {
-        setView('recovery');
-      }
-      setIsAuthChecking(false);
-
-      const {data: listenerData} = supabase.auth.onAuthStateChange(
-        (event, nextSession) => {
-          console.info('[supabase] Auth state change:', {
-            event,
-            hasSession: Boolean(nextSession),
-            userId: nextSession?.user?.id ?? null,
-          });
-          setSession(nextSession ?? null);
-          if (nextSession?.user?.id && nextSession.user.email) {
-            void syncUserProfile({
-              userId: nextSession.user.id,
-              email: nextSession.user.email,
-            }).then((res) => {
-              if (!res.ok) {
-                console.error(
-                  '[supabase] Auth-change profile sync failed:',
-                  res.error,
-                );
-              }
-            });
-          }
-
-          if (event === 'PASSWORD_RECOVERY') {
-            setView('reset');
-          } else if (event === 'SIGNED_IN' && nextSession) {
-            setView(
-              viewRef.current === 'recovery' || viewRef.current === 'reset'
-                ? 'reset'
-                : 'dashboard',
-            );
-          } else if (event === 'SIGNED_OUT') {
-            setOtpForwarded(false);
-            setRecoveryEmail('');
-            writeStoredRecoveryEmail('');
-            setView('login');
-          }
-        },
-      );
-      subscription = listenerData.subscription;
-    }
-
-    void initAuth();
-
-    return () => {
-      active = false;
-      subscription?.unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isAuthChecking && !session && view === 'dashboard') {
+    if (!session && view === 'dashboard') {
       setView('login');
     }
-  }, [isAuthChecking, session, view]);
+  }, [session, view]);
 
   return (
     <div className="min-h-screen bg-white dark:bg-[#0f0f10] text-[#262626] dark:text-[#f3f4f6] font-[Arial,sans-serif] transition-colors">
@@ -268,17 +160,11 @@ export default function App() {
         onChangeThemeMode={setThemeMode}
       />
 
-      {isAuthChecking ? (
-        <main className="min-h-[80vh] flex justify-center items-center">
-          <div className="flex items-center gap-2 text-[14px] text-[#737373] dark:text-[#a1a1aa]">
-            <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-            <span>Checking session...</span>
-          </div>
-        </main>
-      ) : view === 'dashboard' && session ? (
+      {view === 'dashboard' && session ? (
         <DashboardCard
           userId={session.user.id}
-          userEmail={session.user.email || ''}
+          userEmail={session.user.email}
+          accessToken={session.token}
           onLoggedOut={() => {
             setSession(null);
             setOtpForwarded(false);
@@ -317,7 +203,7 @@ export default function App() {
       ) : view === 'reset' ? (
         <PasswordReset
           accountEmail={session?.user.email || recoveryEmail || undefined}
-          accountUserId={session?.user.id ?? null}
+          accessToken={session?.token || null}
           hasRecoverySession={Boolean(session)}
           otpForwarded={otpForwarded}
           onBackToLogin={() => {
@@ -345,7 +231,10 @@ export default function App() {
       ) : (
         <LoginCard
           onForgotPassword={() => setView('recovery')}
-          onAuthSuccess={() => setView('dashboard')}
+          onAuthSuccess={(nextSession) => {
+            setSession(nextSession);
+            setView('dashboard');
+          }}
           onNotify={showToast}
         />
       )}

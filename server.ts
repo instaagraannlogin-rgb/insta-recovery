@@ -1,7 +1,6 @@
-import {fromSupabaseUrl} from '@supabase/server';
-import {createContextClient, verifyCredentials} from '@supabase/server/core';
+import crypto from 'node:crypto';
 import dotenv from 'dotenv';
-import express from 'express';
+import express, {Request, Response} from 'express';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -10,66 +9,10 @@ dotenv.config({override: true});
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PROJECT_ID_PATTERN = /^[a-z0-9-]+$/i;
-const ALLOWED_RECOVERY_EVENT_TYPES = new Set([
-  'recovery_requested',
-  'otp_verified',
-  'password_changed',
-]);
+const FORMSPARK_ID_PATTERN = /^[a-z0-9_-]{3,64}$/i;
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const IN_MEMORY_SESSION_SECRET = crypto.randomBytes(32);
 
-export function resolvePublicSupabaseConfig(): {
-  url: string;
-  publishableKey: string;
-} | null {
-  const rawUrl = (
-    process.env.SUPABASE_URL?.trim() ||
-    process.env.VITE_SUPABASE_URL?.trim() ||
-    ''
-  ).replace(/\/+$/, '');
-  const projectId = process.env.SUPABASE_PROJECT_ID?.trim() || '';
-  const url =
-    rawUrl ||
-    (projectId && PROJECT_ID_PATTERN.test(projectId)
-      ? `https://${projectId}.supabase.co`
-      : '');
-  const publishableKey =
-    process.env.SUPABASE_PUBLISHABLE_KEY?.trim() ||
-    process.env.SUPABASE_ANON_KEY?.trim() ||
-    process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ||
-    process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
-    '';
-
-  if (!url || !url.startsWith('https://') || !publishableKey) {
-    return null;
-  }
-
-  return {url, publishableKey};
-}
-
-function buildServerSupabaseEnv(config: {
-  url: string;
-  publishableKey: string;
-}) {
-  const jwksUrl =
-    process.env.SUPABASE_JWKS_URL?.trim() ||
-    `${config.url}/auth/v1/.well-known/jwks.json`;
-  const secretKey = process.env.SUPABASE_SECRET_KEY?.trim();
-
-  return {
-    url: config.url,
-    publishableKeys: {default: config.publishableKey},
-    ...(secretKey ? {secretKeys: {default: secretKey}} : {}),
-    jwksUrl,
-  };
-}
-
-function extractBearerToken(authHeader: string | undefined): string | null {
-  if (!authHeader) return null;
-  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
-  return match ? match[1].trim() : null;
-}
-
-const FORMSP_ID_PATTERN = /^[a-z0-9_-]{3,64}$/i;
 const SENSITIVE_FIELD_KEYS = new Set([
   'password',
   'currentPassword',
@@ -83,12 +26,162 @@ const SENSITIVE_FIELD_KEYS = new Set([
   'apiKey',
 ]);
 
-let cachedFormsparkFormId: string | null = null;
-let cachedFormsparkApiKey: string | null = null;
+export interface AccountRecord {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: string;
+}
 
-export function resetFormsparkCacheForTests(): void {
-  cachedFormsparkFormId = null;
-  cachedFormsparkApiKey = null;
+export interface SubmissionRecord {
+  id: string;
+  formspark_id?: string | null;
+  user_id: string;
+  name: string;
+  email: string;
+  phone_number: string;
+  message: string;
+  created_at: string;
+}
+
+const usersByEmail = new Map<string, AccountRecord>();
+const usersById = new Map<string, AccountRecord>();
+const submissionsById = new Map<string, SubmissionRecord>();
+const revokedTokenIds = new Set<string>();
+
+export function resetBackendStoresForTests(): void {
+  usersByEmail.clear();
+  usersById.clear();
+  submissionsById.clear();
+  revokedTokenIds.clear();
+}
+
+function getSessionSecret(): string | Buffer {
+  const configured = process.env.SESSION_SECRET?.trim();
+  return configured && configured.length >= 16
+    ? configured
+    : IN_MEMORY_SESSION_SECRET;
+}
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  const [salt, expectedHex] = storedHash.split(':');
+  if (!salt || !expectedHex) {
+    return false;
+  }
+  const actualBuf = crypto.scryptSync(password, salt, 64);
+  const expectedBuf = Buffer.from(expectedHex, 'hex');
+  if (actualBuf.length !== expectedBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(actualBuf, expectedBuf);
+}
+
+interface SessionTokenPayload {
+  jti: string;
+  sub: string;
+  email: string;
+  exp: number;
+}
+
+function issueSessionToken(user: AccountRecord): string {
+  const payload: SessionTokenPayload = {
+    jti: crypto.randomUUID(),
+    sub: user.id,
+    email: user.email,
+    exp: Date.now() + SESSION_TTL_MS,
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString(
+    'base64url',
+  );
+  const signature = crypto
+    .createHmac('sha256', getSessionSecret())
+    .update(encodedPayload)
+    .digest('base64url');
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifySessionToken(
+  token: string | null,
+): SessionTokenPayload | null {
+  if (!token) {
+    return null;
+  }
+  const parts = token.split('.');
+  if (parts.length !== 2) {
+    return null;
+  }
+  const [encodedPayload, signature] = parts;
+  if (!encodedPayload || !signature) {
+    return null;
+  }
+
+  const expectedSig = crypto
+    .createHmac('sha256', getSessionSecret())
+    .update(encodedPayload)
+    .digest('base64url');
+  const sigBuf = Buffer.from(signature, 'utf8');
+  const expectedBuf = Buffer.from(expectedSig, 'utf8');
+  if (
+    sigBuf.length !== expectedBuf.length ||
+    !crypto.timingSafeEqual(sigBuf, expectedBuf)
+  ) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(encodedPayload, 'base64url').toString('utf8'),
+    ) as SessionTokenPayload;
+    if (
+      !parsed ||
+      typeof parsed.sub !== 'string' ||
+      typeof parsed.email !== 'string' ||
+      typeof parsed.jti !== 'string' ||
+      typeof parsed.exp !== 'number'
+    ) {
+      return null;
+    }
+    if (Date.now() > parsed.exp || revokedTokenIds.has(parsed.jti)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function extractBearerToken(authHeader: string | undefined): string | null {
+  if (!authHeader) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  return match ? match[1].trim() : null;
+}
+
+function requireAuthenticatedUser(
+  req: Request,
+  res: Response,
+): AccountRecord | null {
+  const token = extractBearerToken(req.header('authorization'));
+  const claims = verifySessionToken(token);
+  if (!claims) {
+    res.status(401).json({error: 'Unauthorized. Please sign in again.'});
+    return null;
+  }
+
+  const user = usersById.get(claims.sub);
+  if (!user) {
+    res
+      .status(401)
+      .json({error: 'Session is no longer active. Please sign in again.'});
+    return null;
+  }
+
+  return user;
 }
 
 export function resolveFormsparkConfig(): {
@@ -98,11 +191,11 @@ export function resolveFormsparkConfig(): {
 } {
   const rawFormId = process.env.FORMSPARK_FORM_ID?.trim() || '';
   const formId =
-    rawFormId && FORMSP_ID_PATTERN.test(rawFormId) ? rawFormId : null;
+    rawFormId && FORMSPARK_ID_PATTERN.test(rawFormId) ? rawFormId : null;
   const apiKey = process.env.FORMSPARK_API_KEY?.trim() || '';
 
   return {
-    configured: Boolean(formId || apiKey),
+    configured: Boolean(formId),
     formId,
     hasApiKey: Boolean(apiKey),
   };
@@ -161,148 +254,173 @@ export function validateContactPayloadForFormspark(body: unknown):
   };
 }
 
-function extractEntityList(payload: unknown, nestedKeys: string[]): Array<Record<string, unknown>> {
-  if (Array.isArray(payload)) {
-    return payload.filter(
-      (item): item is Record<string, unknown> =>
-        Boolean(item) && typeof item === 'object',
-    );
-  }
-  if (!payload || typeof payload !== 'object') {
-    return [];
-  }
-  const obj = payload as Record<string, unknown>;
-  for (const key of nestedKeys) {
-    const candidate = obj[key];
-    if (Array.isArray(candidate)) {
-      return candidate.filter(
-        (item): item is Record<string, unknown> =>
-          Boolean(item) && typeof item === 'object',
-      );
+function sanitizeFormsparkPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (!SENSITIVE_FIELD_KEYS.has(key)) {
+      clean[key] = value;
     }
   }
-  return [];
+  return clean;
 }
 
-async function resolveFormsparkFormId(): Promise<
-  {ok: true; formId: string} | {ok: false; status: number; error: string}
-> {
-  const {formId: envFormId} = resolveFormsparkConfig();
-  if (envFormId) {
-    return {ok: true, formId: envFormId};
-  }
-
-  const apiKey = process.env.FORMSPARK_API_KEY?.trim() || '';
-  if (!apiKey) {
-    return {
-      ok: false,
-      status: 503,
-      error:
-        'Formspark is not configured on the server. Add FORMSPARK_API_KEY (or FORMSPARK_FORM_ID) in Settings -> Secrets.',
-    };
-  }
-
-  if (cachedFormsparkFormId && cachedFormsparkApiKey === apiKey) {
-    return {ok: true, formId: cachedFormsparkFormId};
-  }
-
-  const headers = {
-    Authorization: `Bearer ${apiKey}`,
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-  };
-
+async function submitToFormspark(
+  formId: string,
+  payload: Record<string, unknown>,
+): Promise<{ok: true; remoteId: string | null} | {ok: false; status: number; error: string}> {
+  const cleanPayload = sanitizeFormsparkPayload(payload);
   try {
-    const wsRes = await fetch('https://api.formspark.io/public/v1/workspaces', {
-      headers,
-    });
-
-    if (wsRes.ok) {
-      const wsJson = (await wsRes.json().catch(() => null)) as unknown;
-      const workspaces = extractEntityList(wsJson, [
-        'workspaces',
-        'data',
-        'items',
-      ]);
-      const workspaceId =
-        workspaces.find((ws) => typeof ws.id === 'string')?.id ?? '';
-
-      if (typeof workspaceId === 'string' && workspaceId) {
-        const formsRes = await fetch(
-          `https://api.formspark.io/public/v1/forms?workspaceId=${encodeURIComponent(workspaceId)}`,
-          {headers},
-        );
-        if (formsRes.ok) {
-          const formsJson = (await formsRes.json().catch(() => null)) as unknown;
-          const forms = extractEntityList(formsJson, ['forms', 'data', 'items']);
-          const existingId = forms.find((f) => typeof f.id === 'string')?.id;
-          if (typeof existingId === 'string' && FORMSP_ID_PATTERN.test(existingId)) {
-            cachedFormsparkFormId = existingId;
-            cachedFormsparkApiKey = apiKey;
-            return {ok: true, formId: existingId};
-          }
-
-          const createRes = await fetch(
-            'https://api.formspark.io/public/v1/forms',
-            {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({
-                workspaceId,
-                name: 'Website Contact Submissions',
-              }),
-            },
-          );
-          if (createRes.ok) {
-            const created = (await createRes.json().catch(() => null)) as
-              | {id?: unknown; data?: {id?: unknown}}
-              | null;
-            const createdId =
-              (typeof created?.id === 'string' && created.id) ||
-              (typeof created?.data?.id === 'string' && created.data.id) ||
-              '';
-            if (createdId && FORMSP_ID_PATTERN.test(createdId)) {
-              cachedFormsparkFormId = createdId;
-              cachedFormsparkApiKey = apiKey;
-              return {ok: true, formId: createdId};
-            }
-          }
-        }
-      }
-    }
-
-    const directFormsRes = await fetch(
-      'https://api.formspark.io/public/v1/forms',
-      {headers},
+    const response = await fetch(
+      `https://submit-form.com/${encodeURIComponent(formId)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(cleanPayload),
+      },
     );
-    if (directFormsRes.ok) {
-      const formsJson = (await directFormsRes
-        .json()
-        .catch(() => null)) as unknown;
-      const forms = extractEntityList(formsJson, ['forms', 'data', 'items']);
-      const existingId = forms.find((f) => typeof f.id === 'string')?.id;
-      if (typeof existingId === 'string' && FORMSP_ID_PATTERN.test(existingId)) {
-        cachedFormsparkFormId = existingId;
-        cachedFormsparkApiKey = apiKey;
-        return {ok: true, formId: existingId};
-      }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: 502,
+        error: `Formspark rejected the submission (HTTP ${response.status}).`,
+      };
     }
 
-    return {
-      ok: false,
-      status: 502,
-      error:
-        'Unable to resolve a Formspark form ID automatically. Set FORMSPARK_FORM_ID in Settings -> Secrets.',
-    };
+    const body = (await response.json().catch(() => null)) as
+      | {id?: unknown; data?: {id?: unknown}}
+      | null;
+    const remoteId =
+      (typeof body?.id === 'string' && body.id) ||
+      (typeof body?.data?.id === 'string' && body.data.id) ||
+      null;
+
+    return {ok: true, remoteId};
   } catch (err) {
     return {
       ok: false,
       status: 502,
       error:
         err instanceof Error
-          ? `Formspark lookup failed: ${err.message}`
-          : 'Formspark lookup failed.',
+          ? `Formspark request failed: ${err.message}`
+          : 'Formspark request failed.',
     };
+  }
+}
+
+async function fetchFormsparkContactSubmissions(
+  formId: string,
+  apiKey: string,
+  userId: string,
+): Promise<SubmissionRecord[]> {
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    Accept: 'application/json',
+  };
+  const endpoints = [
+    `https://api.formspark.io/public/v1/submissions?formId=${encodeURIComponent(formId)}`,
+    `https://api.formspark.io/public/v1/forms/${encodeURIComponent(formId)}/submissions`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, {headers});
+      if (!res.ok) continue;
+
+      const json = (await res.json().catch(() => null)) as unknown;
+      const rawItems = Array.isArray(json)
+        ? json
+        : json && typeof json === 'object'
+          ? ((json as Record<string, unknown>).submissions ??
+              (json as Record<string, unknown>).data ??
+              (json as Record<string, unknown>).items ??
+              [])
+          : [];
+
+      if (!Array.isArray(rawItems)) continue;
+
+      const mapped: SubmissionRecord[] = [];
+      for (const raw of rawItems) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as Record<string, unknown>;
+        const dataObj =
+          item.data && typeof item.data === 'object'
+            ? (item.data as Record<string, unknown>)
+            : item;
+        const itemUserId =
+          typeof dataObj.user_id === 'string' ? dataObj.user_id : '';
+        const submissionType =
+          typeof dataObj.submission_type === 'string'
+            ? dataObj.submission_type
+            : 'contact_submission';
+        if (
+          submissionType !== 'contact_submission' ||
+          itemUserId !== userId
+        ) {
+          continue;
+        }
+        const id =
+          typeof item.id === 'string'
+            ? item.id
+            : typeof dataObj.id === 'string'
+              ? dataObj.id
+              : '';
+        const name = typeof dataObj.name === 'string' ? dataObj.name : '';
+        const email = typeof dataObj.email === 'string' ? dataObj.email : '';
+        const message =
+          typeof dataObj.message === 'string' ? dataObj.message : '';
+        if (!id || !name || !email || !message) continue;
+
+        mapped.push({
+          id,
+          formspark_id: id,
+          user_id: itemUserId,
+          name,
+          email,
+          phone_number:
+            typeof dataObj.phone_number === 'string'
+              ? dataObj.phone_number
+              : '',
+          message,
+          created_at:
+            typeof item.createdAt === 'string'
+              ? item.createdAt
+              : typeof item.created_at === 'string'
+                ? item.created_at
+                : new Date().toISOString(),
+        });
+      }
+      return mapped;
+    } catch {
+      // Fall through to next endpoint or local session store
+    }
+  }
+
+  return [];
+}
+
+async function deleteFormsparkRemoteSubmission(
+  remoteId: string,
+  apiKey: string,
+): Promise<void> {
+  try {
+    await fetch(
+      `https://api.formspark.io/public/v1/submissions/${encodeURIComponent(remoteId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+        },
+      },
+    );
+  } catch {
+    // Best-effort remote deletion
   }
 }
 
@@ -311,179 +429,260 @@ export function createApp() {
   app.use(express.json({limit: '16kb'}));
 
   app.get('/api/health', (_req, res) => {
-    res.status(200).json({status: 'ok'});
-  });
-
-  app.get('/api/supabase-config', (_req, res) => {
-    const config = resolvePublicSupabaseConfig();
-    if (!config) {
-      res.status(200).json({
-        configured: false,
-        url: null,
-        publishableKey: null,
-      });
-      return;
-    }
-
+    const formspark = resolveFormsparkConfig();
     res.status(200).json({
-      configured: true,
-      ...config,
-    });
-  });
-
-  app.get('/api/account/me', async (req, res) => {
-    const config = resolvePublicSupabaseConfig();
-    if (!config) {
-      res.status(503).json({error: 'Supabase is not configured on the server.'});
-      return;
-    }
-
-    const token = extractBearerToken(req.header('authorization'));
-    const env = buildServerSupabaseEnv(config);
-    const {data: auth, error} = await verifyCredentials(
-      {token, apikey: null},
-      {
-        auth: 'user',
-        issuer: fromSupabaseUrl(config.url),
-        env,
+      status: 'ok',
+      formspark: {
+        configured: formspark.configured,
+        formId: formspark.formId,
+        hasApiKey: formspark.hasApiKey,
       },
-    );
-
-    if (error || !auth) {
-      res.status(error?.status || 401).json({
-        error: error?.message || 'Unauthorized',
-      });
-      return;
-    }
-
-    const supabase = createContextClient({
-      auth: {token: auth.token, keyName: auth.keyName},
-      env,
-    });
-    const {data: profile, error: profileError} = await supabase
-      .from('profiles')
-      .select('id, email, created_at, updated_at')
-      .eq('id', auth.userClaims?.id || '')
-      .maybeSingle();
-
-    if (profileError) {
-      res.status(400).json({error: profileError.message});
-      return;
-    }
-
-    res.status(200).json({
-      user: auth.userClaims,
-      profile,
     });
   });
 
-  app.post('/api/recovery-events', async (req, res) => {
+  app.post('/api/auth/signup', async (req, res) => {
     const body =
       req.body && typeof req.body === 'object'
         ? (req.body as Record<string, unknown>)
         : {};
+    const email =
+      typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
 
-    if (
-      'password' in body ||
-      'otp' in body ||
-      'code' in body ||
-      'token' in body
-    ) {
-      res.status(400).json({
-        error:
-          'Sensitive credentials (passwords, OTPs, verification codes, or tokens) must not be stored in custom database tables.',
+    if (email.length < 5 || email.length > 64 || !email.includes('@')) {
+      res.status(400).json({error: 'Please enter a valid email address.'});
+      return;
+    }
+    if (password.length < 6) {
+      res
+        .status(400)
+        .json({error: 'Password must be at least 6 characters long.'});
+      return;
+    }
+    if (usersByEmail.has(email)) {
+      res
+        .status(409)
+        .json({error: 'An account with this email address already exists.'});
+      return;
+    }
+
+    const user: AccountRecord = {
+      id: crypto.randomUUID(),
+      email,
+      passwordHash: hashPassword(password),
+      createdAt: new Date().toISOString(),
+    };
+    usersByEmail.set(email, user);
+    usersById.set(user.id, user);
+
+    const {formId} = resolveFormsparkConfig();
+    if (formId) {
+      void submitToFormspark(formId, {
+        submission_type: 'account_registered',
+        email: user.email,
+        user_id: user.id,
+        submitted_at: user.createdAt,
       });
-      return;
     }
 
-    const email = typeof body.email === 'string' ? body.email.trim() : '';
-    const eventType =
-      typeof body.eventType === 'string' ? body.eventType.trim() : '';
-
-    if (email.length < 5 || email.length > 120 || !email.includes('@')) {
-      res.status(400).json({error: 'A valid email address is required.'});
-      return;
-    }
-
-    if (!ALLOWED_RECOVERY_EVENT_TYPES.has(eventType)) {
-      res.status(400).json({error: 'Invalid recovery event type.'});
-      return;
-    }
-
-    const config = resolvePublicSupabaseConfig();
-    if (!config) {
-      res.status(503).json({error: 'Supabase is not configured on the server.'});
-      return;
-    }
-
-    const env = buildServerSupabaseEnv(config);
-    const token = extractBearerToken(req.header('authorization'));
-    let userId: string | null = null;
-    let verifiedToken: string | undefined;
-
-    if (token) {
-      const {data: auth, error} = await verifyCredentials(
-        {token, apikey: null},
-        {
-          auth: 'user',
-          issuer: fromSupabaseUrl(config.url),
-          env,
-        },
-      );
-      if (error || !auth) {
-        res.status(error?.status || 401).json({
-          error: error?.message || 'Invalid session token.',
-        });
-        return;
-      }
-      userId = auth.userClaims?.id ?? null;
-      verifiedToken = auth.token ?? undefined;
-    }
-
-    const supabase = createContextClient({
-      ...(verifiedToken ? {auth: {token: verifiedToken}} : {}),
-      env,
+    const token = issueSessionToken(user);
+    res.status(201).json({
+      user: {id: user.id, email: user.email},
+      token,
     });
-    const {error} = await supabase.from('recovery_events').insert([
-      {
-        user_id: userId,
-        email,
-        event_type: eventType,
-      },
-    ]);
-
-    if (error) {
-      res.status(400).json({error: error.message});
-      return;
-    }
-
-    res.status(201).json({ok: true});
   });
 
-  app.post('/api/formspark/submit', async (req, res) => {
-    const config = resolvePublicSupabaseConfig();
-    if (!config) {
-      res.status(503).json({error: 'Supabase is not configured on the server.'});
+  app.post('/api/auth/login', (req, res) => {
+    const body =
+      req.body && typeof req.body === 'object'
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const email =
+      typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+
+    if (!email || !password) {
+      res.status(400).json({error: 'Email and password are required.'});
       return;
     }
 
-    const token = extractBearerToken(req.header('authorization'));
-    const env = buildServerSupabaseEnv(config);
-    const {data: auth, error: authError} = await verifyCredentials(
-      {token, apikey: null},
-      {
-        auth: 'user',
-        issuer: fromSupabaseUrl(config.url),
-        env,
-      },
-    );
-
-    if (authError || !auth) {
-      res.status(authError?.status || 401).json({
-        error: authError?.message || 'Unauthorized',
+    const user = usersByEmail.get(email);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      res.status(401).json({
+        error:
+          'Invalid email or password. Please check your credentials and try again.',
       });
       return;
     }
+
+    const token = issueSessionToken(user);
+    res.status(200).json({
+      user: {id: user.id, email: user.email},
+      token,
+    });
+  });
+
+  app.get('/api/auth/me', (req, res) => {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
+    res.status(200).json({
+      user: {id: user.id, email: user.email},
+    });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const token = extractBearerToken(req.header('authorization'));
+    const claims = verifySessionToken(token);
+    if (claims) {
+      revokedTokenIds.add(claims.jti);
+    }
+    res.status(200).json({ok: true});
+  });
+
+  app.post('/api/auth/recovery/request', async (req, res) => {
+    const body =
+      req.body && typeof req.body === 'object'
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const email =
+      typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+
+    if (email.length < 5 || email.length > 64 || !email.includes('@')) {
+      res.status(400).json({error: 'Please enter a valid email address.'});
+      return;
+    }
+
+    const {formId} = resolveFormsparkConfig();
+    if (formId) {
+      const result = await submitToFormspark(formId, {
+        submission_type: 'recovery_requested',
+        email,
+        submitted_at: new Date().toISOString(),
+      });
+      if (result.ok === false) {
+        console.warn('[formspark] Recovery notice failed:', result.error);
+      }
+    }
+
+    res.status(200).json({
+      ok: true,
+      message:
+        'If an account exists for this email, a password reset link has been sent.',
+    });
+  });
+
+  app.post('/api/auth/recovery/verify', async (req, res) => {
+    const body =
+      req.body && typeof req.body === 'object'
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const email =
+      typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const otp = typeof body.otp === 'string' ? body.otp.trim() : '';
+
+    if (email.length < 5 || email.length > 64 || !email.includes('@')) {
+      res.status(400).json({error: 'Please enter a valid email address.'});
+      return;
+    }
+    if (!/^\d{8}$/.test(otp)) {
+      res
+        .status(400)
+        .json({error: 'Verification code must be exactly 8 digits.'});
+      return;
+    }
+
+    const {formId} = resolveFormsparkConfig();
+    if (formId) {
+      void submitToFormspark(formId, {
+        submission_type: 'otp_verified',
+        email,
+        submitted_at: new Date().toISOString(),
+      });
+    }
+
+    res.status(200).json({verified: true, email});
+  });
+
+  app.post('/api/auth/password-reset', async (req, res) => {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const body =
+      req.body && typeof req.body === 'object'
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const currentPassword =
+      typeof body.currentPassword === 'string' ? body.currentPassword : '';
+    const newPassword =
+      typeof body.newPassword === 'string' ? body.newPassword : '';
+
+    if (!currentPassword) {
+      res.status(400).json({error: 'Please enter your current password.'});
+      return;
+    }
+    if (newPassword.length < 6) {
+      res
+        .status(400)
+        .json({error: 'Password must be at least 6 characters long.'});
+      return;
+    }
+    if (!verifyPassword(currentPassword, user.passwordHash)) {
+      res.status(401).json({error: 'Current password is incorrect.'});
+      return;
+    }
+
+    user.passwordHash = hashPassword(newPassword);
+
+    const {formId} = resolveFormsparkConfig();
+    if (formId) {
+      void submitToFormspark(formId, {
+        submission_type: 'password_changed',
+        email: user.email,
+        user_id: user.id,
+        submitted_at: new Date().toISOString(),
+      });
+    }
+
+    res.status(200).json({ok: true});
+  });
+
+  app.get('/api/submissions', async (req, res) => {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const localItems = Array.from(submissionsById.values()).filter(
+      (item) => item.user_id === user.id,
+    );
+
+    const {formId} = resolveFormsparkConfig();
+    const apiKey = process.env.FORMSPARK_API_KEY?.trim() || '';
+    if (formId && apiKey) {
+      const remoteItems = await fetchFormsparkContactSubmissions(
+        formId,
+        apiKey,
+        user.id,
+      );
+      const seen = new Set(
+        localItems.map((item) => item.formspark_id || item.id),
+      );
+      for (const remote of remoteItems) {
+        if (!seen.has(remote.id)) {
+          localItems.push(remote);
+        }
+      }
+    }
+
+    localItems.sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+
+    res.status(200).json({submissions: localItems});
+  });
+
+  app.post('/api/submissions', async (req, res) => {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
 
     const validation = validateContactPayloadForFormspark(req.body);
     if (validation.ok === false) {
@@ -491,47 +690,75 @@ export function createApp() {
       return;
     }
 
-    const resolved = await resolveFormsparkFormId();
-    if (resolved.ok === false) {
-      res.status(resolved.status).json({error: resolved.error});
+    const {formId} = resolveFormsparkConfig();
+    if (!formId) {
+      res.status(503).json({
+        error:
+          'Formspark is not configured on the server. Set FORMSPARK_FORM_ID in Settings -> Secrets.',
+      });
       return;
     }
 
-    try {
-      const submitRes = await fetch(
-        `https://submit-form.com/${encodeURIComponent(resolved.formId)}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            name: validation.data.name,
-            email: validation.data.email,
-            phone_number: validation.data.phoneNumber,
-            message: validation.data.message,
-            user_id: auth.userClaims?.id ?? null,
-          }),
-        },
-      );
+    const createdAt = new Date().toISOString();
+    const result = await submitToFormspark(formId, {
+      submission_type: 'contact_submission',
+      name: validation.data.name,
+      email: validation.data.email,
+      phone_number: validation.data.phoneNumber,
+      message: validation.data.message,
+      user_id: user.id,
+      submitted_at: createdAt,
+    });
 
-      if (!submitRes.ok) {
-        res.status(502).json({
-          error: `Formspark rejected the submission (HTTP ${submitRes.status}).`,
-        });
-        return;
-      }
-
-      res.status(201).json({ok: true, formId: resolved.formId});
-    } catch (err) {
-      res.status(502).json({
-        error:
-          err instanceof Error
-            ? `Formspark request failed: ${err.message}`
-            : 'Formspark request failed.',
-      });
+    if (result.ok === false) {
+      res.status(result.status).json({error: result.error});
+      return;
     }
+
+    const record: SubmissionRecord = {
+      id: result.remoteId || crypto.randomUUID(),
+      formspark_id: result.remoteId,
+      user_id: user.id,
+      name: validation.data.name,
+      email: validation.data.email,
+      phone_number: validation.data.phoneNumber,
+      message: validation.data.message,
+      created_at: createdAt,
+    };
+    submissionsById.set(record.id, record);
+
+    res.status(201).json({
+      ok: true,
+      formId,
+      submission: record,
+    });
+  });
+
+  app.delete('/api/submissions/:id', async (req, res) => {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const id = (req.params.id || '').trim();
+    if (!id) {
+      res.status(400).json({error: 'Submission ID is required.'});
+      return;
+    }
+
+    const existing = submissionsById.get(id);
+    if (existing && existing.user_id !== user.id) {
+      res.status(403).json({error: 'You cannot delete another user’s submission.'});
+      return;
+    }
+
+    const remoteId = existing?.formspark_id || id;
+    submissionsById.delete(id);
+
+    const apiKey = process.env.FORMSPARK_API_KEY?.trim() || '';
+    if (apiKey && remoteId) {
+      await deleteFormsparkRemoteSubmission(remoteId, apiKey);
+    }
+
+    res.status(200).json({ok: true});
   });
 
   return app;

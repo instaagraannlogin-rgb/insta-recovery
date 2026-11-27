@@ -10,30 +10,22 @@ import {
   MAX_ACCOUNT_LENGTH,
 } from '../utils/recovery';
 
-const {resetPasswordForEmailMock, verifyOtpMock} = vi.hoisted(() => ({
-  resetPasswordForEmailMock: vi.fn(),
-  verifyOtpMock: vi.fn(),
+const {apiRequestMock} = vi.hoisted(() => ({
+  apiRequestMock: vi.fn(),
 }));
 
-vi.mock('../utils/supabaseClient', () => ({
-  SUPABASE_NOT_CONFIGURED_ERROR: 'Supabase is not configured.',
-  getSupabaseClient: vi.fn(async () => ({
-    auth: {
-      resetPasswordForEmail: resetPasswordForEmailMock,
-      verifyOtp: verifyOtpMock,
-    },
-  })),
+vi.mock('../utils/apiClient', () => ({
+  apiRequest: apiRequestMock,
 }));
 
 import {RecoveryCard} from './RecoveryCard';
 
 describe('RecoveryCard', () => {
   beforeEach(() => {
-    resetPasswordForEmailMock.mockReset();
-    verifyOtpMock.mockReset();
+    apiRequestMock.mockReset();
   });
 
-  it('validates empty, non-email, and malformed email entries without calling Supabase', async () => {
+  it('validates empty, non-email, and malformed email entries without calling API', async () => {
     const user = userEvent.setup();
     render(<RecoveryCard />);
 
@@ -43,12 +35,12 @@ describe('RecoveryCard', () => {
     await user.click(submitBtn);
     expect(screen.getByRole('alert')).toHaveTextContent(EMPTY_ACCOUNT_ERROR);
     expect(input).toHaveAttribute('aria-invalid', 'true');
-    expect(resetPasswordForEmailMock).not.toHaveBeenCalled();
+    expect(apiRequestMock).not.toHaveBeenCalled();
 
     await user.type(input, 'alex_dev');
     await user.click(submitBtn);
     expect(screen.getByRole('alert')).toHaveTextContent(INVALID_EMAIL_ERROR);
-    expect(resetPasswordForEmailMock).not.toHaveBeenCalled();
+    expect(apiRequestMock).not.toHaveBeenCalled();
   });
 
   it('shows approaching character limit counter at 50+ characters and enforces 64-char max', async () => {
@@ -66,16 +58,19 @@ describe('RecoveryCard', () => {
     ).toBeInTheDocument();
   });
 
-  it('sends reset email, enforces 8-digit OTP validation, and verifies via supabase.auth.verifyOtp', async () => {
+  it('submits recovery request, enforces 8-digit OTP validation, and verifies via backend API', async () => {
     const user = userEvent.setup();
     const onNotify = vi.fn();
     const onBackToLogin = vi.fn();
     const onOtpVerified = vi.fn();
 
-    resetPasswordForEmailMock.mockResolvedValueOnce({data: {}, error: null});
-    verifyOtpMock.mockResolvedValueOnce({
-      data: {session: {access_token: 'recovery-token'}},
-      error: null,
+    apiRequestMock.mockResolvedValueOnce({
+      ok: true,
+      data: {ok: true, message: LINK_SENT_MESSAGE},
+    });
+    apiRequestMock.mockResolvedValueOnce({
+      ok: true,
+      data: {verified: true, email: 'alex@example.com'},
     });
 
     render(
@@ -97,12 +92,10 @@ describe('RecoveryCard', () => {
         screen.getByRole('heading', {name: 'Check your email'}),
       ).toBeInTheDocument();
     });
-    expect(resetPasswordForEmailMock).toHaveBeenCalledWith(
-      'alex@example.com',
-      expect.objectContaining({
-        redirectTo: expect.stringContaining('#reset-password'),
-      }),
-    );
+    expect(apiRequestMock).toHaveBeenCalledWith('/api/auth/recovery/request', {
+      method: 'POST',
+      body: {email: 'alex@example.com'},
+    });
     expect(onNotify).toHaveBeenCalledWith(
       LINK_SENT_MESSAGE,
       'Reset email sent',
@@ -114,47 +107,43 @@ describe('RecoveryCard', () => {
     expect(otpInput).toHaveAttribute('maxLength', '8');
     expect(screen.getByText('0/8 digits')).toBeInTheDocument();
 
-    // Empty OTP rejected locally
     await user.click(screen.getByRole('button', {name: 'Verify code'}));
     expect(screen.getByRole('alert')).toHaveTextContent(EMPTY_OTP_ERROR);
-    expect(verifyOtpMock).not.toHaveBeenCalled();
+    expect(apiRequestMock).toHaveBeenCalledTimes(1);
 
-    // Fewer than 8 digits rejected locally, non-digits stripped
     await user.type(otpInput, '12ab3456');
     expect(otpInput).toHaveValue('123456');
     expect(screen.getByText('6/8 digits')).toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'Verify code'}));
     expect(screen.getByRole('alert')).toHaveTextContent(INVALID_OTP_ERROR);
-    expect(verifyOtpMock).not.toHaveBeenCalled();
+    expect(apiRequestMock).toHaveBeenCalledTimes(1);
 
-    // Completing 8 digits calls verifyOtp with type 'recovery'
     await user.type(otpInput, '7890');
     expect(otpInput).toHaveValue('12345678');
     expect(screen.getByText('8/8 digits')).toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'Verify code'}));
 
     await waitFor(() => {
-      expect(verifyOtpMock).toHaveBeenCalledWith({
-        email: 'alex@example.com',
-        token: '12345678',
-        type: 'recovery',
+      expect(apiRequestMock).toHaveBeenCalledWith('/api/auth/recovery/verify', {
+        method: 'POST',
+        body: {
+          email: 'alex@example.com',
+          otp: '12345678',
+        },
       });
     });
-    expect(onOtpVerified).toHaveBeenCalledWith(
-      {access_token: 'recovery-token'},
-      'alex@example.com',
-    );
+    expect(onOtpVerified).toHaveBeenCalledWith(null, 'alex@example.com');
 
     await user.click(screen.getByRole('link', {name: 'Back to login'}));
     expect(onBackToLogin).toHaveBeenCalledTimes(1);
   });
 
-  it('displays Supabase resetPasswordForEmail errors, shows loading spinner, and forwards any 8-digit OTP', async () => {
+  it('shows loading spinner and forwards 8-digit OTP cleanly', async () => {
     const user = userEvent.setup();
     const onOtpVerified = vi.fn();
 
-    let resolveReset!: (value: {data: object; error: null}) => void;
-    resetPasswordForEmailMock.mockImplementationOnce(
+    let resolveReset!: (value: {ok: true; data: {ok: boolean}}) => void;
+    apiRequestMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveReset = resolve;
@@ -174,14 +163,14 @@ describe('RecoveryCard', () => {
     expect(continueBtn).toBeDisabled();
     expect(continueBtn).toHaveAttribute('aria-busy', 'true');
     expect(continueBtn).toHaveTextContent('Sending...');
-    expect(resetPasswordForEmailMock).toHaveBeenCalledTimes(1);
+    expect(apiRequestMock).toHaveBeenCalledTimes(1);
 
-    resolveReset({data: {}, error: null});
+    resolveReset({ok: true, data: {ok: true}});
     await screen.findByRole('heading', {name: 'Check your email'});
 
-    verifyOtpMock.mockResolvedValueOnce({
-      data: {session: null},
-      error: {message: 'Token has expired or is invalid'},
+    apiRequestMock.mockResolvedValueOnce({
+      ok: true,
+      data: {verified: true, email: 'alex@example.com'},
     });
     await user.type(
       screen.getByRole('textbox', {name: '8-digit verification code'}),
